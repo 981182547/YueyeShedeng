@@ -8,6 +8,21 @@ import '../models/lamp.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
 
+/// 调坐标时打开它,会把每个灯位的点击热区用青色框画出来,
+/// 一眼就能看出热区有没有盖住灯、相邻的有没有重叠。发版前记得关掉。
+const bool kShowHitAreas = false;
+
+/// 光点上标什么数字
+enum LampLabel {
+  none,
+
+  /// 标所属【组】的编号 1~4,和车图上标注的编号一致 —— 主页用
+  group,
+
+  /// 标【灯位】编号 1~8 —— 单灯页用
+  lamp,
+}
+
 /// 车辆实拍图 + 灯位热区。
 ///
 /// 图片按原始比例铺满,灯位用【相对坐标】叠在上面,所以任何屏幕尺寸下
@@ -21,15 +36,15 @@ class CarView extends StatefulWidget {
   /// 高亮显示某一组(在组卡片上按住时用)
   final int? highlightGroup;
 
-  /// 单灯页会把每个灯位标上序号,主页面不标
-  final bool showLabels;
+  /// 光点上标什么数字
+  final LampLabel labelMode;
 
   const CarView({
     super.key,
     required this.state,
     required this.onTapLamp,
     this.highlightGroup,
-    this.showLabels = false,
+    this.labelMode = LampLabel.none,
   });
 
   @override
@@ -164,8 +179,13 @@ class _CarViewState extends State<CarView> with SingleTickerProviderStateMixin {
 
     return AspectRatio(
       aspectRatio: _aspect,
-      child: LayoutBuilder(
-        builder: (context, c) {
+      // 立柱上下那两个灯挨得太近,在手机上只隔十几 dp。
+      // 套一层缩放:两指放大之后就能精确点到想要的那一组。
+      // scale=1 时 InteractiveViewer 不吃拖动手势,页面照样能正常上下滚。
+      child: InteractiveViewer(
+        maxScale: 4,
+        child: LayoutBuilder(
+          builder: (context, c) {
           final w = c.maxWidth;
           final h = c.maxHeight;
 
@@ -203,7 +223,7 @@ class _CarViewState extends State<CarView> with SingleTickerProviderStateMixin {
                       ),
                     ),
 
-                  // 灯位热区
+                  // 光点:只负责画,不接收点击
                   for (final l in kLamps)
                     _LampDot(
                       lamp: l,
@@ -218,20 +238,50 @@ class _CarViewState extends State<CarView> with SingleTickerProviderStateMixin {
                           kGroups[widget.highlightGroup!]
                               .lampIds
                               .contains(l.id),
-                      label: widget.showLabels ? '${l.id + 1}' : null,
-                      onTap: () => widget.onTapLamp(l),
+                      label: switch (widget.labelMode) {
+                        LampLabel.none => null,
+                        // 组号从 1 开始，正好是车图上标的那个编号
+                        LampLabel.group => '${groupOf(l.id).id + 1}',
+                        LampLabel.lamp => '${l.id + 1}',
+                      },
+                    ),
+
+                  // 点击热区:铺在光点之上,用的是比灯大一圈的矩形。
+                  // 和光点分开画是有原因的 —— 热区中心不等于灯的中心
+                  // (立柱上灯的热区往上扩,下灯往下扩),两者重合反而点不准。
+                  for (final l in kLamps)
+                    Positioned(
+                      left: l.hx0 * w,
+                      top: l.hy0 * h,
+                      width: l.hitW * w,
+                      height: l.hitH * h,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () => widget.onTapLamp(l),
+                        child: kShowHitAreas
+                            ? Container(
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: const Color(0xFF00E5FF),
+                                    width: 1,
+                                  ),
+                                ),
+                              )
+                            : null,
+                      ),
                     ),
                 ],
               );
             },
           );
         },
+        ),
       ),
     );
   }
 }
 
-/// 单个灯位:一个可点的发光点
+/// 单个灯位的发光点。纯视觉,点击由上面那层热区负责。
 class _LampDot extends StatelessWidget {
   final Lamp lamp;
   final double boxW;
@@ -242,7 +292,6 @@ class _LampDot extends StatelessWidget {
   final bool instant; // true = 不走渐变(爆闪)
   final bool highlighted;
   final String? label;
-  final VoidCallback onTap;
 
   const _LampDot({
     required this.lamp,
@@ -254,29 +303,23 @@ class _LampDot extends StatelessWidget {
     required this.instant,
     required this.highlighted,
     required this.label,
-    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    // size 就是灯的宽度(相对图片宽度)。横条灯压扁到 0.42 倍高，
+    // 圆灯宽高一致。这样坐标表里的 size 和图上量到的尺寸是同一个意思。
     final d = lamp.size * boxW;
     final isBar = lamp.shape == LampShape.bar;
-    final w = isBar ? d * 1.6 : d;
-    final h = isBar ? d * 0.5 : d;
-
-    // 点击热区至少 44dp,否则格栅上那两个小灯根本点不中
-    const minHit = 44.0;
-    final hitW = w < minHit ? minHit : w;
-    final hitH = h < minHit ? minHit : h;
+    final w = d;
+    final h = isBar ? d * 0.42 : d;
 
     return Positioned(
-      left: lamp.x * boxW - hitW / 2,
-      top: lamp.y * boxH - hitH / 2,
-      width: hitW,
-      height: hitH,
-      child: GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
+      left: lamp.x * boxW - w / 2,
+      top: lamp.y * boxH - h / 2,
+      width: w,
+      height: h,
+      child: IgnorePointer(
         child: Center(
           child: AnimatedContainer(
             duration: Duration(milliseconds: instant ? 0 : 220),

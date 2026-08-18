@@ -60,15 +60,12 @@ class HomeScreen extends StatelessWidget {
                   _StatusBar(state: state),
                   const SizedBox(height: 8),
 
-                  // 车图:点哪个灯位,就开关它所在的那一组
+                  // 车图:点哪个灯位,就开关它所在的那一组。
+                  // 光点上标的数字就是组号,和车上标注的编号一一对应。
                   CarView(
                     state: state,
-                    onTapLamp: (lamp) {
-                      final g = kGroups.firstWhere(
-                        (g) => g.lampIds.contains(lamp.id),
-                      );
-                      state.toggleGroup(g);
-                    },
+                    labelMode: LampLabel.group,
+                    onTapLamp: (lamp) => state.toggleGroup(groupOf(lamp.id)),
                   ),
 
                   const SizedBox(height: 12),
@@ -269,10 +266,28 @@ class _GroupCard extends StatelessWidget {
         ),
         child: Column(
           children: [
-            Icon(
-              on ? Icons.lightbulb : Icons.lightbulb_outline,
-              size: 20,
-              color: active ? lightColor : AppColors.textLo,
+            // 编号徽章:和车图上那个光点里标的数字是同一个
+            Container(
+              width: 22,
+              height: 22,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: active
+                    ? lightColor.withValues(alpha: 0.9)
+                    : Colors.transparent,
+                border: Border.all(
+                  color: active ? lightColor : AppColors.border,
+                ),
+              ),
+              child: Text(
+                '${group.id + 1}',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: active ? Colors.black87 : AppColors.textLo,
+                ),
+              ),
             ),
             const SizedBox(height: 6),
             Text(

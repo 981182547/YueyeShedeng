@@ -48,10 +48,10 @@ class LampsScreen extends StatelessWidget {
                 ),
               ),
 
-              // 车图:这里点一下只切一个灯位
+              // 车图:这里点一下只切一个灯位,光点上标的是灯位号 1~8
               CarView(
                 state: state,
-                showLabels: true,
+                labelMode: LampLabel.lamp,
                 onTapLamp: (lamp) => state.toggleLamp(lamp.id),
               ),
 

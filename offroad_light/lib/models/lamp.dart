@@ -6,8 +6,10 @@ enum LampShape { round, bar }
 /// 一个物理灯位。
 ///
 /// [id] 必须和 ESP 固件里的灯位编号完全一致 —— 协议就是靠这个数字对齐的:
-///   0 车顶左    1 车顶右    2 立柱左  3 立柱右
-///   4 前包围左  5 前包围右  6 侧边左  7 侧边右
+///   0 前包围左  1 前包围右   (车图上标「1」)
+///   2 立柱下左  3 立柱下右   (车图上标「2」)
+///   4 立柱上左  5 立柱上右   (车图上标「3」)
+///   6 车顶左    7 车顶右     (车图上标「4」)
 ///
 /// [x] [y] 是灯位中心在车辆图片上的【相对坐标】(0~1),不是像素。
 /// 这样换手机、换分辨率都不用改,图片怎么缩放热区都跟得上。
@@ -19,14 +21,28 @@ class Lamp {
   final double size; // 相对图片宽度的尺寸
   final LampShape shape;
 
+  /// 点击热区(相对坐标的矩形,左/上/右/下)。
+  ///
+  /// 故意比灯本身大一圈,把灯周围的空白也算进去,手指好点。
+  /// 关键是相邻灯位的热区【上下相接但不重叠】—— 立柱上下那两个灯
+  /// 中心只差 0.059,在手机上只隔 12dp,不这么分区就永远点不中下面那个。
+  final double hx0, hy0, hx1, hy1;
+
   const Lamp({
     required this.id,
     required this.name,
     required this.x,
     required this.y,
     required this.size,
+    required this.hx0,
+    required this.hy0,
+    required this.hx1,
+    required this.hy1,
     this.shape = LampShape.round,
   });
+
+  double get hitW => hx1 - hx0;
+  double get hitH => hy1 - hy0;
 }
 
 /// 一组灯 = 车上同一个位置的左右两个灯位。
@@ -61,29 +77,67 @@ class LampGroup {
 const String kCarImagePreferred = 'assets/images/car.png';
 const String kCarImageDir = 'assets/images/';
 
+/// 坐标是在 assets/images/car.png(1672x941)上逐个量出来的:
+/// 把灯位区域放大 5 倍、叠 0.01 步长的坐标网格，读出灯的外圈范围再取中心。
+/// 换图之后重新量一遍这张表就行，其它代码都不用动。
 const List<Lamp> kLamps = [
-  // ── 车顶:行李架前端两个横向灯条 ──
-  Lamp(id: 0, name: '车顶左', x: 0.427, y: 0.158, size: 0.055, shape: LampShape.bar),
-  Lamp(id: 1, name: '车顶右', x: 0.697, y: 0.187, size: 0.042, shape: LampShape.bar),
-  // ── 立柱:A 柱上的两个圆形射灯 ──
-  Lamp(id: 2, name: '立柱左', x: 0.450, y: 0.366, size: 0.040),
-  Lamp(id: 3, name: '立柱右', x: 0.783, y: 0.358, size: 0.036),
-  // ── 前包围:中网里的两个小射灯 ──
-  Lamp(id: 4, name: '前包围左', x: 0.714, y: 0.515, size: 0.030),
-  Lamp(id: 5, name: '前包围右', x: 0.792, y: 0.515, size: 0.030),
-  // ── 侧边:翼子板两侧的圆形射灯 ──
-  Lamp(id: 6, name: '侧边左', x: 0.588, y: 0.593, size: 0.042),
-  Lamp(id: 7, name: '侧边右', x: 0.896, y: 0.590, size: 0.040),
+  // ── 1 前包围:保险杠两侧那对大圆灯 ──
+  Lamp(
+    id: 0, name: '前包围左', x: 0.591, y: 0.584, size: 0.046,
+    hx0: 0.553, hy0: 0.491, hx1: 0.632, hy1: 0.659,
+  ),
+  Lamp(
+    id: 1, name: '前包围右', x: 0.898, y: 0.583, size: 0.045,
+    hx0: 0.855, hy0: 0.491, hx1: 0.937, hy1: 0.659,
+  ),
+  // ── 2 立柱下:A 柱上【下面】那对圆灯 ──
+  //    热区往下吃掉到引擎盖之间的空白
+  Lamp(
+    id: 2, name: '立柱下左', x: 0.443, y: 0.368, size: 0.043,
+    hx0: 0.414, hy0: 0.340, hx1: 0.472, hy1: 0.430,
+  ),
+  Lamp(
+    id: 3, name: '立柱下右', x: 0.778, y: 0.368, size: 0.033,
+    hx0: 0.752, hy0: 0.340, hx1: 0.818, hy1: 0.430,
+  ),
+  // ── 3 立柱上:A 柱上【上面】那对圆灯 ──
+  //    热区往上吃掉到车顶之间的空白,下边界正好和「立柱下」相接
+  Lamp(
+    id: 4, name: '立柱上左', x: 0.443, y: 0.309, size: 0.043,
+    hx0: 0.414, hy0: 0.238, hx1: 0.472, hy1: 0.336,
+  ),
+  Lamp(
+    id: 5, name: '立柱上右', x: 0.778, y: 0.309, size: 0.033,
+    hx0: 0.752, hy0: 0.238, hx1: 0.818, hy1: 0.336,
+  ),
+  // ── 4 车顶:行李架【前梁】上那对短灯条 ──
+  //    注意不是顶上那根横跨整个车顶的长灯条，那根没有单独分组
+  Lamp(
+    id: 6, name: '车顶左', x: 0.463, y: 0.174, size: 0.036,
+    shape: LampShape.bar,
+    hx0: 0.423, hy0: 0.132, hx1: 0.507, hy1: 0.215,
+  ),
+  Lamp(
+    id: 7, name: '车顶右', x: 0.693, y: 0.179, size: 0.039,
+    shape: LampShape.bar,
+    hx0: 0.651, hy0: 0.132, hx1: 0.742, hy1: 0.215,
+  ),
 ];
 
+/// 分组顺序特意和车图上标的编号一一对应:
+/// 组 0 显示成「1」、组 1 显示成「2」…… 界面上标几,图上就是哪一组。
 const List<LampGroup> kGroups = [
-  LampGroup(id: 0, name: '车顶', subtitle: '行李架 · 2 只', lampIds: [0, 1]),
-  LampGroup(id: 1, name: '立柱', subtitle: 'A 柱 · 2 只', lampIds: [2, 3]),
-  LampGroup(id: 2, name: '前包围', subtitle: '中网 · 2 只', lampIds: [4, 5]),
-  LampGroup(id: 3, name: '侧边', subtitle: '翼子板 · 2 只', lampIds: [6, 7]),
+  LampGroup(id: 0, name: '前包围', subtitle: '保险杠两侧 · 2 只', lampIds: [0, 1]),
+  LampGroup(id: 1, name: '立柱下', subtitle: 'A 柱下 · 2 只', lampIds: [2, 3]),
+  LampGroup(id: 2, name: '立柱上', subtitle: 'A 柱上 · 2 只', lampIds: [4, 5]),
+  LampGroup(id: 3, name: '车顶', subtitle: '行李架 · 2 只', lampIds: [6, 7]),
 ];
 
 Lamp lampById(int id) => kLamps.firstWhere((l) => l.id == id);
+
+/// 某个灯位属于哪一组
+LampGroup groupOf(int lampId) =>
+    kGroups.firstWhere((g) => g.lampIds.contains(lampId));
 
 /// ══════════════════════════════════════════════════════════
 /// 工作模式
