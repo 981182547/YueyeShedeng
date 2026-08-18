@@ -52,12 +52,45 @@ jobs:
         run: flutter analyze
 
       # 按 ABI 拆分：每个包比通用包小很多，装机更省空间
+      #
+      # set -o pipefail 不能少：Actions 的 bash 默认取管道最后一条命令的退出码，
+      # 接了 tee 之后 flutter 失败也会被判成成功，构建就白跑了。
       - name: 编译 APK
-        run: flutter build apk --release --split-per-abi
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter build apk --release --split-per-abi 2>&1 | tee /tmp/build-split.log
 
       # 再出一个通用包，不确定手机架构时用这个
       - name: 编译通用 APK
-        run: flutter build apk --release
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter build apk --release 2>&1 | tee /tmp/build-universal.log
+
+      # GitHub 的运行日志要登录才能看，annotation 却是公开的。
+      # 构建挂了就把报错摘成 annotation，不用登录也能直接定位问题。
+      - name: 失败时暴露报错
+        if: failure()
+        shell: bash
+        run: |
+          for f in /tmp/build-split.log /tmp/build-universal.log; do
+            [ -f "$f" ] || continue
+            echo "================ $f 尾部 ================"
+            tail -c 5000 "$f"
+          done
+          msg=$(cat /tmp/build-*.log 2>/dev/null \
+                | grep -iE "^(FAILURE|error|\* What went wrong|Caused by)|error:|Exception|Unsupported|requires" \
+                | tail -25 | tr '\n' '~')
+          echo "::error::${msg:-没匹配到错误行，见上面的日志尾部}"
+
+      - name: 上传构建日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: /tmp/build-*.log
+          retention-days: 7
 
       - name: 列出产物
         run: ls -lh build/app/outputs/flutter-apk/
