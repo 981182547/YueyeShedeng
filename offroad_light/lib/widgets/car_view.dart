@@ -181,7 +181,7 @@ class _CarViewState extends State<CarView> with SingleTickerProviderStateMixin {
 
           return AnimatedBuilder(
             animation: _flash,
-            builder: (context, __) {
+            builder: (context, _) {
               // 非爆闪时恒为 1(常亮);爆闪时按节奏表在 1 和 0 之间跳
               final level = flashing ? _flashLevel(_flash.value) : 1.0;
 

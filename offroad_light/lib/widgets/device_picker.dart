@@ -108,7 +108,7 @@ class _DeviceSheetState extends State<_DeviceSheet> {
                   : ListView.separated(
                       shrinkWrap: true,
                       itemCount: list.length,
-                      separatorBuilder: (_, __) =>
+                      separatorBuilder: (_, _) =>
                           const Divider(height: 1, color: AppColors.border),
                       itemBuilder: (_, i) => _tile(list[i]),
                     ),
