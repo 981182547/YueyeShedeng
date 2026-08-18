@@ -105,6 +105,22 @@ class AppState extends ChangeNotifier {
   /// 灯位开着,并且当前模式确实在出光 —— 车图上只有这种才画成发光的
   bool isLampLit(int id) => isLampOn(id) && mode != LightMode.off;
 
+  /// 这一刻灯的实际亮度 0~100,车图按它决定光点画多亮。
+  ///
+  /// 只有常亮模式跟滑条走;日行是固定低亮、自动看光敏、爆闪走节奏表,
+  /// 都是固件说了算,这里照着固件的常量算一份。
+  int get effectiveDuty => switch (mode) {
+        LightMode.off => 0,
+        LightMode.steady => brightness,
+        LightMode.drl => FixedDuty.drl,
+        LightMode.auto => night ? FixedDuty.autoNight : FixedDuty.autoDay,
+        LightMode.flash => FixedDuty.flash,
+        _ => 0,
+      };
+
+  /// 归一化成 0~1,给界面调发光强度用
+  double get lightIntensity => (effectiveDuty / 100).clamp(0.0, 1.0);
+
   // ---- 操作(乐观更新 + 下发) ----
 
   /// 只切模式,不动颜色

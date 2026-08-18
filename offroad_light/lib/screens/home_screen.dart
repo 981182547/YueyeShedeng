@@ -22,7 +22,7 @@ class HomeScreen extends StatelessWidget {
           appBar: AppBar(
             title: const Text('SPOTLIGHT'),
             actions: [
-              const _ConnChip(),
+              _ConnChip(state: state),
               IconButton(
                 tooltip: state.mode == LightMode.off ? '开灯' : '关灯',
                 icon: Icon(
@@ -60,11 +60,9 @@ class HomeScreen extends StatelessWidget {
                   _StatusBar(state: state),
                   const SizedBox(height: 8),
 
-                  // 车图:点哪个灯位,就开关它所在的那一组。
-                  // 光点上标的数字就是组号,和车上标注的编号一一对应。
+                  // 车图:点哪个灯位,就开关它所在的那一组
                   CarView(
                     state: state,
-                    labelMode: LampLabel.group,
                     onTapLamp: (lamp) => state.toggleGroup(groupOf(lamp.id)),
                   ),
 
@@ -100,13 +98,18 @@ class HomeScreen extends StatelessWidget {
   }
 }
 
-/// AppBar 上的连接状态小圆点
+/// AppBar 上的连接状态小圆点。
+///
+/// state 必须当参数传进来,不能用 InheritedWidget 去取:
+/// AppState 是个 ChangeNotifier,对象引用从头到尾不变,
+/// InheritedWidget 的 updateShouldNotify 比的是引用,永远是 false,
+/// 于是连上了这里还一直显示"未连接"。
 class _ConnChip extends StatelessWidget {
-  const _ConnChip();
+  final AppState state;
+  const _ConnChip({required this.state});
 
   @override
   Widget build(BuildContext context) {
-    final state = AppScope.of(context);
     final (color, text) = switch (state.conn) {
       ConnState.connected => (AppColors.online, '已连接'),
       ConnState.connecting => (Colors.amber, '连接中'),
@@ -266,28 +269,10 @@ class _GroupCard extends StatelessWidget {
         ),
         child: Column(
           children: [
-            // 编号徽章:和车图上那个光点里标的数字是同一个
-            Container(
-              width: 22,
-              height: 22,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: active
-                    ? lightColor.withValues(alpha: 0.9)
-                    : Colors.transparent,
-                border: Border.all(
-                  color: active ? lightColor : AppColors.border,
-                ),
-              ),
-              child: Text(
-                '${group.id + 1}',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: active ? Colors.black87 : AppColors.textLo,
-                ),
-              ),
+            Icon(
+              on ? Icons.lightbulb : Icons.lightbulb_outline,
+              size: 20,
+              color: active ? lightColor : AppColors.textLo,
             ),
             const SizedBox(height: 6),
             Text(
@@ -584,17 +569,3 @@ class _ModeButton extends StatelessWidget {
   }
 }
 
-/// 让子组件不用层层传参也能拿到 AppState
-class AppScope extends InheritedWidget {
-  final AppState state;
-  const AppScope({super.key, required this.state, required super.child});
-
-  static AppState of(BuildContext context) {
-    final scope = context.dependOnInheritedWidgetOfExactType<AppScope>();
-    assert(scope != null, 'AppScope 没有挂在树上');
-    return scope!.state;
-  }
-
-  @override
-  bool updateShouldNotify(AppScope old) => old.state != state;
-}

@@ -162,6 +162,18 @@ class LightMode {
   static const flash = 4; // 爆闪
 }
 
+/// 固件里定死的几个亮度档(对应 .ino 里的 DUTY_*)。
+///
+/// 只有常亮模式用得上滑条,其余模式的亮度由固件按传感器和节奏表决定。
+/// 界面照着这几个值算一份,车图上的发光强度才和车上看到的对得上。
+/// 改了固件的 DUTY_* 记得同步这里。
+class FixedDuty {
+  static const drl = 10; // DUTY_DRL
+  static const autoDay = 20; // DUTY_DAY
+  static const autoNight = 100; // DUTY_NIGHT
+  static const flash = 100;
+}
+
 class ModeInfo {
   final int id;
   final String name;

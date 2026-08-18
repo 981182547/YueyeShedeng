@@ -86,10 +86,7 @@ class _SpotlightAppState extends State<SpotlightApp> {
       debugShowCheckedModeBanner: false,
       scaffoldMessengerKey: messengerKey,
       theme: buildTheme(),
-      home: AppScope(
-        state: state,
-        child: HomeScreen(state: state),
-      ),
+      home: HomeScreen(state: state),
     );
   }
 }

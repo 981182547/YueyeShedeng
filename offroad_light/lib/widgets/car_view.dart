@@ -204,6 +204,8 @@ class _CarViewState extends State<CarView> with SingleTickerProviderStateMixin {
             builder: (context, _) {
               // 非爆闪时恒为 1(常亮);爆闪时按节奏表在 1 和 0 之间跳
               final level = flashing ? _flashLevel(_flash.value) : 1.0;
+              // 当前亮度(0~1):拖亮度滑条时车图上的灯会跟着明暗变化
+              final intensity = st.lightIntensity;
 
               return Stack(
                 fit: StackFit.expand,
@@ -211,7 +213,7 @@ class _CarViewState extends State<CarView> with SingleTickerProviderStateMixin {
                   Image.asset(_asset!, fit: BoxFit.contain),
 
                   // 光束层:车头朝左,所以光往左前方射
-                  if (beams.isNotEmpty && level > 0)
+                  if (beams.isNotEmpty && level > 0 && intensity > 0)
                     IgnorePointer(
                       child: CustomPaint(
                         painter: _BeamPainter(
@@ -219,6 +221,7 @@ class _CarViewState extends State<CarView> with SingleTickerProviderStateMixin {
                           sizes: beamSizes,
                           color: glow,
                           flashing: flashing,
+                          intensity: intensity,
                         ),
                       ),
                     ),
@@ -233,6 +236,7 @@ class _CarViewState extends State<CarView> with SingleTickerProviderStateMixin {
                       lit: st.isLampLit(l.id) && level > 0,
                       on: st.isLampOn(l.id),
                       glow: glow,
+                      intensity: intensity,
                       instant: flashing, // 爆闪要硬切,不能走渐变动画
                       highlighted: widget.highlightGroup != null &&
                           kGroups[widget.highlightGroup!]
@@ -289,6 +293,7 @@ class _LampDot extends StatelessWidget {
   final bool lit; // 正在发光(灯位开着 + 模式不是关灯)
   final bool on; // 灯位开关本身
   final Color glow;
+  final double intensity; // 当前亮度 0~1，决定光点多亮、光晕多大
   final bool instant; // true = 不走渐变(爆闪)
   final bool highlighted;
   final String? label;
@@ -300,6 +305,7 @@ class _LampDot extends StatelessWidget {
     required this.lit,
     required this.on,
     required this.glow,
+    required this.intensity,
     required this.instant,
     required this.highlighted,
     required this.label,
@@ -328,8 +334,10 @@ class _LampDot extends StatelessWidget {
             decoration: BoxDecoration(
               shape: isBar ? BoxShape.rectangle : BoxShape.circle,
               borderRadius: isBar ? BorderRadius.circular(h / 2) : null,
+              // 灯芯:亮度低时压暗,但不压到看不见 —— 10% 的日行灯
+              // 在车上也还是看得出在亮的
               color: lit
-                  ? glow.withValues(alpha: 0.95)
+                  ? glow.withValues(alpha: 0.30 + 0.65 * intensity)
                   : Colors.black.withValues(alpha: 0.35),
               border: Border.all(
                 color: lit
@@ -339,17 +347,18 @@ class _LampDot extends StatelessWidget {
                         : Colors.white.withValues(alpha: on ? 0.55 : 0.22)),
                 width: highlighted ? 2.0 : 1.4,
               ),
+              // 光晕整体跟着亮度缩放:调暗时不只是变淡,散开的范围也收小
               boxShadow: lit
                   ? [
                       BoxShadow(
-                        color: glow.withValues(alpha: 0.75),
-                        blurRadius: d * 1.1,
-                        spreadRadius: d * 0.28,
+                        color: glow.withValues(alpha: 0.78 * intensity),
+                        blurRadius: d * (0.45 + 0.65 * intensity),
+                        spreadRadius: d * 0.30 * intensity,
                       ),
                       BoxShadow(
-                        color: glow.withValues(alpha: 0.35),
-                        blurRadius: d * 2.6,
-                        spreadRadius: d * 0.75,
+                        color: glow.withValues(alpha: 0.38 * intensity),
+                        blurRadius: d * (0.9 + 1.7 * intensity),
+                        spreadRadius: d * 0.78 * intensity,
                       ),
                     ]
                   : (highlighted
@@ -386,12 +395,14 @@ class _BeamPainter extends CustomPainter {
   final List<double> sizes;
   final Color color;
   final bool flashing;
+  final double intensity;
 
   _BeamPainter({
     required this.origins,
     required this.sizes,
     required this.color,
     required this.flashing,
+    required this.intensity,
   });
 
   @override
@@ -399,7 +410,8 @@ class _BeamPainter extends CustomPainter {
     for (var i = 0; i < origins.length; i++) {
       final o = origins[i];
       final r = sizes[i];
-      final len = size.width * 0.55; // 光束长度
+      // 光束长度也跟着亮度走:调暗了射得就没那么远
+      final len = size.width * (0.18 + 0.37 * intensity);
       final spread = r * 2.6; // 远端张开的半高
 
       // 车头朝左,光往左射;略微向下,和图里那道光轨的方向一致
@@ -419,8 +431,8 @@ class _BeamPainter extends CustomPainter {
           Offset(o.dx, o.dy),
           Offset(endX, endY),
           [
-            color.withValues(alpha: flashing ? 0.42 : 0.30),
-            color.withValues(alpha: 0.10),
+            color.withValues(alpha: (flashing ? 0.42 : 0.30) * intensity),
+            color.withValues(alpha: 0.10 * intensity),
             color.withValues(alpha: 0.0),
           ],
           const [0.0, 0.45, 1.0],
@@ -435,7 +447,8 @@ class _BeamPainter extends CustomPainter {
   bool shouldRepaint(_BeamPainter old) =>
       old.origins.length != origins.length ||
       old.color != color ||
-      old.flashing != flashing;
+      old.flashing != flashing ||
+      old.intensity != intensity;
 }
 
 /// 图片还没放进去时的提示。不画假车,直接告诉你该干什么。
