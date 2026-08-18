@@ -341,9 +341,16 @@ class BleManager {
     }
   }
 
+  /// Notify 到底订上了没。
+  ///
+  /// 这一步失败的话,车上用语音/传感器改了状态,手机是完全不会知道的 ——
+  /// 界面看着一切正常,其实显示的是过期数据。所以必须让界面能看见这个状态。
+  bool notifyReady = false;
+
   /// 订阅射灯的 Notify 特征。
   /// 设备端语音、传感器、手机三方谁改了状态都会推一帧过来,界面据此实时刷新。
   Future<void> _subscribeNotify(List<BluetoothService> services) async {
+    notifyReady = false;
     BluetoothCharacteristic? tx;
     for (final svc in services) {
       for (final c in svc.characteristics) {
@@ -351,13 +358,17 @@ class BleManager {
       }
     }
     if (tx == null) {
-      _log('未找到状态上报特征,界面将无法自动刷新');
+      _log('未找到状态上报特征,车上改了状态手机不会自动刷新');
       return;
     }
     try {
-      await tx.setNotifyValue(true);
+      // 顺序很重要:先挂监听,再开订阅。
+      // 反过来的话,setNotifyValue 返回到 listen 之间设备推过来的帧会直接丢掉,
+      // 而连上后的第一帧恰恰就在这个窗口里。
       await _notifySub?.cancel();
       _notifySub = tx.onValueReceived.listen(_onDeviceData);
+      await tx.setNotifyValue(true);
+      notifyReady = true;
     } catch (e) {
       _log('订阅状态上报失败: $e');
     }
@@ -471,6 +482,7 @@ class BleManager {
     _rxBuf.clear();
     _rx = null;
     _mtu = 23;
+    notifyReady = false;
   }
 
   void dispose() {

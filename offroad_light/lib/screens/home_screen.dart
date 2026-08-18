@@ -214,6 +214,45 @@ class _StatusBar extends StatelessWidget {
             const SizedBox(width: 6),
             const Icon(Icons.water_drop, size: 15, color: Color(0xFF60A5FA)),
           ],
+          if (state.isConnected) ...[
+            const SizedBox(width: 8),
+            _SyncDot(state: state),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// 上报链路的健康指示。
+///
+/// 车上的语音、光敏、雨滴改了状态,靠设备主动推 0x20 帧过来,界面才跟得上。
+/// 这条链路断了的话界面一切正常、显示的却是过期数据 —— 不给个指示根本发现不了。
+/// 设备每 2 秒兜底推一帧,所以连着的时候计数应该一直在涨。
+class _SyncDot extends StatelessWidget {
+  final AppState state;
+  const _SyncDot({required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    final (color, icon, text) = !state.notifyReady
+        ? (AppColors.accent, Icons.sync_problem, '未订阅')
+        : state.reportCount == 0
+            ? (Colors.amber, Icons.sync, '等待上报')
+            : (AppColors.online, Icons.sync, '${state.reportCount}');
+
+    return Tooltip(
+      message: !state.notifyReady
+          ? '没订阅上设备的状态上报,车上改了状态这里不会自动刷新'
+          : state.reportCount == 0
+              ? '还没收到过设备上报'
+              : '已收到 ${state.reportCount} 帧设备上报',
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: color),
+          const SizedBox(width: 3),
+          Text(text, style: TextStyle(fontSize: 11, color: color)),
         ],
       ),
     );

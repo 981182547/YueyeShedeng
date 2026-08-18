@@ -45,6 +45,16 @@ class AppState extends ChangeNotifier {
   /// 是否收到过设备的状态上报。没连上时界面显示的只是上次的记忆值。
   bool synced = false;
 
+  /// 收到过多少帧设备上报。
+  ///
+  /// 排查"车上用语音改了灯、手机没跟着变"就看它:
+  /// 设备每 2 秒会兜底推一帧,所以连着的时候这个数字应该一直在涨。
+  /// 不涨 = 上报链路断了,界面显示的是过期状态。
+  int reportCount = 0;
+
+  /// Notify 订阅成功了没(订不上就收不到任何上报)
+  bool get notifyReady => ble?.notifyReady ?? false;
+
   /// 灯这一刻是不是黄的(界面配色跟着它走)
   bool get isYellow => activeColor == LightColorId.yellow;
 
@@ -67,7 +77,10 @@ class AppState extends ChangeNotifier {
 
   void setConn(ConnState c) {
     conn = c;
-    if (c != ConnState.connected) synced = false;
+    if (c != ConnState.connected) {
+      synced = false;
+      reportCount = 0;
+    }
     notifyListeners();
   }
 
@@ -81,6 +94,7 @@ class AppState extends ChangeNotifier {
     night = s.night;
     rain = s.rain;
     synced = true;
+    reportCount++;
     notifyListeners();
   }
 

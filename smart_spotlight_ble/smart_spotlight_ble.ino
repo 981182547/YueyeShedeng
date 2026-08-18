@@ -295,6 +295,12 @@ static BLEServer         *bleServer = nullptr;
 static BLECharacteristic *txChar    = nullptr;
 static bool               bleConnected = false;
 
+/* 累计发出去多少帧状态。串口每秒打印它 ——
+ * 排查「语音改了灯、手机没跟着变」时，先看这个数字动没动：
+ *   不动  = 固件没发（没连上，或者 txChar 没建起来）
+ *   在涨但手机没反应 = 帧发出去了，问题在手机那边没订阅上 */
+static uint32_t notifyCount = 0;
+
 /* 把当前状态打包成一帧 0xA5 上报给手机。
  * App 收到就刷新界面 —— 语音、传感器、手机三方谁改了状态，手机上都能立刻看到。 */
 static void notifyStatus() {
@@ -316,6 +322,7 @@ static void notifyStatus() {
 
   txChar->setValue(pkt, sizeof(pkt));
   txChar->notify();
+  notifyCount++;
 }
 
 /* NVS 延迟写入：变化停下来之后才落盘 */
@@ -683,7 +690,7 @@ void loop() {
   logMs += TICK_MS;
   if (logMs >= 1000) {
     logMs = 0;
-    Serial.printf("Mode:%s Color:%s(选%s) Mask:0x%02X Light:%s Rain:%s BLE:%s | Y:%d%% W:%d%%\n",
+    Serial.printf("Mode:%s Color:%s(选%s) Mask:0x%02X Light:%s Rain:%s BLE:%s Notify:%lu | Y:%d%% W:%d%%\n",
                   reason,
                   (activeColor == COLOR_WHITE) ? "White" : "Yellow",
                   (userColor == COLOR_WHITE) ? "W" : "Y",
@@ -691,6 +698,7 @@ void loop() {
                   curLight ? "Night" : "Day",
                   curRain  ? "Dry"   : "Rain",
                   bleConnected ? "ON" : "--",
+                  (unsigned long)notifyCount,
                   dutyY, dutyW);
   }
 
