@@ -53,7 +53,17 @@
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
-#include <BLE2902.h>
+
+/* CCCD(0x2902)描述符：Core 2.x 要自己加，Core 3.x 会随 NOTIFY 属性自动加。
+ * 在 3.x 上再手动加一个会变成两个 CCCD —— 手机订阅时写的是这一个、
+ * 固件检查的是那一个，于是 notify() 照发，手机一帧都收不到。
+ * 「语音改了灯、手机不同步」十有八九就是栽在这里。 */
+#if !defined(ESP_ARDUINO_VERSION_MAJOR) || ESP_ARDUINO_VERSION_MAJOR < 3
+  #define NEED_MANUAL_CCCD 1
+  #include <BLE2902.h>
+#else
+  #define NEED_MANUAL_CCCD 0
+#endif
 
 /* ==========================================================
  * 一、引脚与参数配置
@@ -478,7 +488,14 @@ static void bleInit() {
   txChar = svc->createCharacteristic(
       CHAR_TX_UUID,
       BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_READ);
-  txChar->addDescriptor(new BLE2902());   /* 没有 2902 描述符，手机订阅不了通知 */
+#if NEED_MANUAL_CCCD
+  /* Core 2.x：没有 2902 描述符手机就订阅不了通知，必须手动加 */
+  txChar->addDescriptor(new BLE2902());
+  Serial.println("[BLE] CCCD 手动添加(Core 2.x)");
+#else
+  /* Core 3.x：NOTIFY 属性会自动带上 CCCD，这里再加就重复了 */
+  Serial.println("[BLE] CCCD 由内核自动添加(Core 3.x)");
+#endif
 
   svc->start();
 
