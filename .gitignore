@@ -1,0 +1,27 @@
+# ---------------- Flutter / Dart ----------------
+**/.dart_tool/
+**/.packages
+**/.pub-cache/
+**/.pub/
+**/build/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+
+# ---------------- Android ----------------
+# local.properties 里是本机的 SDK 路径，提交上去会让别人和 CI 构建失败
+**/android/.gradle/
+**/android/.kotlin/
+**/android/local.properties
+**/android/app/build/
+**/key.properties
+*.jks
+*.keystore
+
+# ---------------- IDE ----------------
+.idea/
+.vscode/
+*.iml
+
+# ---------------- 系统 ----------------
+Thumbs.db
+.DS_Store

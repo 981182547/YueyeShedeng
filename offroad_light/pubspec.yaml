@@ -1,0 +1,30 @@
+name: offroad_light
+description: "越野射灯蓝牙控制器"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  flutter_blue_plus: 1.35.3   # MIT 协议，个人和商用都免费
+  permission_handler: 12.0.0
+  shared_preferences: ^2.5.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    # 车辆实拍图。把那张 Jeep 图存成 assets/images/car.png 就会自动用上；
+    # 没放图也不会崩，界面会提示你把图放到哪里。
+    - assets/images/

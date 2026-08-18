@@ -1,0 +1,71 @@
+# ============================================================
+# 云端构建 Android APK
+#
+# Flutter 工程在子目录 offroad_light/，所以下面用 working-directory 指过去；
+# 但 .github/workflows/ 必须放在仓库根目录，GitHub Actions 只认这个位置。
+#
+# 本地那套 Flutter 太旧(3.29.2)，装不上新版依赖，所以构建走云端最新 stable。
+#
+# 用法：
+#   1. 推送到 main 分支自动触发；
+#   2. 也可在 Actions 页面 → 选本工作流 → Run workflow 手动触发。
+#   3. 跑完在该次运行页面底部 Artifacts 下载 SPOTLIGHT-android，直接装手机。
+# ============================================================
+
+name: 构建 Android APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  android:
+    name: 构建 Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    defaults:
+      run:
+        working-directory: offroad_light
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: 拉取依赖
+        run: flutter pub get
+
+      - name: 静态检查
+        run: flutter analyze
+
+      # 按 ABI 拆分：每个包比通用包小很多，装机更省空间
+      - name: 编译 APK
+        run: flutter build apk --release --split-per-abi
+
+      # 再出一个通用包，不确定手机架构时用这个
+      - name: 编译通用 APK
+        run: flutter build apk --release
+
+      - name: 列出产物
+        run: ls -lh build/app/outputs/flutter-apk/
+
+      # 这里的 path 是相对【仓库根目录】的，不受 working-directory 影响
+      - name: 上传 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SPOTLIGHT-android
+          path: offroad_light/build/app/outputs/flutter-apk/*.apk
+          retention-days: 30
