@@ -1,5 +1,12 @@
 ﻿plugins {
     id("com.android.application")
+    // 这一行不能少：下面用了 kotlin { compilerOptions { ... } }，
+    // 而它由 Kotlin Gradle 插件提供。settings.gradle.kts 里这个插件是
+    // apply false（只声明版本不应用），gradle.properties 又设了
+    // android.builtInKotlin=false 关掉 AGP 9 的内置 Kotlin，
+    // 两头都不提供 kotlin{} 扩展，缺了它脚本会直接编译失败：
+    //   Unresolved reference 'compilerOptions' / 'jvmTarget'
+    id("org.jetbrains.kotlin.android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
