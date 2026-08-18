@@ -69,7 +69,7 @@ class HomeScreen extends StatelessWidget {
                   const SizedBox(height: 12),
                   _GroupRow(state: state),
                   const SizedBox(height: 14),
-                  _BrightnessRow(state: state),
+                  _BrightnessBar(state: state),
                   const SizedBox(height: 10),
 
                   OutlinedButton.icon(
@@ -214,45 +214,6 @@ class _StatusBar extends StatelessWidget {
             const SizedBox(width: 6),
             const Icon(Icons.water_drop, size: 15, color: Color(0xFF60A5FA)),
           ],
-          if (state.isConnected) ...[
-            const SizedBox(width: 8),
-            _SyncDot(state: state),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-/// 上报链路的健康指示。
-///
-/// 车上的语音、光敏、雨滴改了状态,靠设备主动推 0x20 帧过来,界面才跟得上。
-/// 这条链路断了的话界面一切正常、显示的却是过期数据 —— 不给个指示根本发现不了。
-/// 设备每 2 秒兜底推一帧,所以连着的时候计数应该一直在涨。
-class _SyncDot extends StatelessWidget {
-  final AppState state;
-  const _SyncDot({required this.state});
-
-  @override
-  Widget build(BuildContext context) {
-    final (color, icon, text) = !state.notifyReady
-        ? (AppColors.accent, Icons.sync_problem, '未订阅')
-        : state.reportCount == 0
-            ? (Colors.amber, Icons.sync, '等待上报')
-            : (AppColors.online, Icons.sync, '${state.reportCount}');
-
-    return Tooltip(
-      message: !state.notifyReady
-          ? '没订阅上设备的状态上报,车上改了状态这里不会自动刷新'
-          : state.reportCount == 0
-              ? '还没收到过设备上报'
-              : '已收到 ${state.reportCount} 帧设备上报',
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 13, color: color),
-          const SizedBox(width: 3),
-          Text(text, style: TextStyle(fontSize: 11, color: color)),
         ],
       ),
     );
@@ -339,44 +300,113 @@ class _GroupCard extends StatelessWidget {
   }
 }
 
-class _BrightnessRow extends StatelessWidget {
+/// 亮度条:整条都能点、能拖。
+///
+/// 没有用 Material 的 Slider —— 那个的触摸目标只有中间那个小圆点,
+/// 在车上单手操作基本抓不住。这里做成填充条,条上任意位置按下即生效,
+/// 手指横着划就能连续调,触摸高度 52dp。
+class _BrightnessBar extends StatelessWidget {
   final AppState state;
-  const _BrightnessRow({required this.state});
+  const _BrightnessBar({required this.state});
 
   @override
   Widget build(BuildContext context) {
     // 只有常亮模式的亮度是用户说了算。
     // 日行是固定低亮度、自动看光敏、爆闪走节奏表,这三个手动调没有意义。
     final adjustable = state.mode == LightMode.steady;
+    // 不可调的时候显示固件真正在用的那个亮度,而不是滑条记着的值,
+    // 否则日行模式下会显示上次拖到的 100%,和车上看到的对不上。
+    final shown = adjustable ? state.brightness : state.effectiveDuty;
+    final lightColor =
+        state.isYellow ? AppColors.lightYellow : AppColors.lightWhite;
+    final off = state.mode == LightMode.off;
 
-    return Opacity(
-      opacity: adjustable ? 1 : 0.45,
-      child: Row(
-        children: [
-          const Icon(Icons.brightness_6, size: 18, color: AppColors.textLo),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Slider(
-              value: state.brightness.toDouble(),
-              min: 0,
-              max: 100,
-              divisions: 20,
-              label: '${state.brightness}%',
-              onChanged: adjustable
-                  ? (v) => state.setBrightness(v.round())
-                  : null,
+    return LayoutBuilder(
+      builder: (context, c) {
+        final w = c.maxWidth;
+
+        void applyAt(double dx, {bool commit = false}) {
+          state.setBrightness(((dx / w) * 100).round(), commit: commit);
+        }
+
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          // 点一下直接跳到该位置,不用非得从滑块开始拖
+          onTapDown:
+              adjustable ? (d) => applyAt(d.localPosition.dx, commit: true) : null,
+          onHorizontalDragUpdate:
+              adjustable ? (d) => applyAt(d.localPosition.dx) : null,
+          onHorizontalDragEnd:
+              adjustable ? (_) => state.commitBrightness() : null,
+          child: Opacity(
+            opacity: adjustable ? 1 : 0.5,
+            child: Container(
+              height: 52,
+              decoration: BoxDecoration(
+                color: AppColors.surfaceHi,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: AppColors.border),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Stack(
+                children: [
+                  // 填充部分:用当前灯色,一眼看出调到哪儿了
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FractionallySizedBox(
+                      widthFactor: (shown / 100).clamp(0.0, 1.0),
+                      heightFactor: 1,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              lightColor.withValues(alpha: off ? 0.10 : 0.16),
+                              lightColor.withValues(alpha: off ? 0.16 : 0.34),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 15),
+                    child: Row(
+                      children: [
+                        Icon(Icons.brightness_6,
+                            size: 19,
+                            color: off ? AppColors.textLo : lightColor),
+                        const SizedBox(width: 10),
+                        Text(
+                          '亮度',
+                          style: TextStyle(
+                            fontSize: 13.5,
+                            color: AppColors.textHi.withValues(alpha: 0.9),
+                          ),
+                        ),
+                        const Spacer(),
+                        // 锁:提示这个模式的亮度是固件定的,不是没反应
+                        if (!adjustable) ...[
+                          const Icon(Icons.lock_outline,
+                              size: 13, color: AppColors.textLo),
+                          const SizedBox(width: 5),
+                        ],
+                        Text(
+                          '$shown%',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: off ? AppColors.textLo : AppColors.textHi,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-          SizedBox(
-            width: 40,
-            child: Text(
-              '${state.brightness}%',
-              textAlign: TextAlign.right,
-              style: const TextStyle(color: AppColors.textLo, fontSize: 12.5),
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 }

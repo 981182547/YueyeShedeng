@@ -184,11 +184,28 @@ class AppState extends ChangeNotifier {
   void allOn() => setLampMask(0xFF);
   void allOff() => setLampMask(0x00);
 
-  void setBrightness(int duty) {
-    brightness = duty.clamp(0, 100);
-    notifyListeners();
-    ble?.send(Protocol.brightness(brightness));
+  DateTime _lastBrightSend = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// 设置亮度。
+  ///
+  /// 拖动时这个方法会被连续调用,每次都发一包蓝牙会把写队列堵住、灯反而跟不上手,
+  /// 所以下发限流到 120ms 一次。界面自己是每次都刷的,拖起来依旧跟手。
+  /// 松手时用 commit 补发一次最终值,免得灯停在限流丢掉的那个中间值上。
+  void setBrightness(int duty, {bool commit = false}) {
+    final v = duty.clamp(0, 100);
+    if (v != brightness) {
+      brightness = v;
+      notifyListeners();
+    }
+    final now = DateTime.now();
+    if (commit || now.difference(_lastBrightSend).inMilliseconds >= 120) {
+      _lastBrightSend = now;
+      ble?.send(Protocol.brightness(brightness));
+    }
   }
+
+  /// 拖动结束时调用:确保最终值一定发到设备
+  void commitBrightness() => setBrightness(brightness, commit: true);
 
   /// 总开关:关灯 <-> 回到关灯前的那个模式
   void togglePower() {
