@@ -93,7 +93,7 @@ class HomeScreen extends StatelessWidget {
               ),
             ),
           ),
-          bottomNavigationBar: _ModeBar(state: state),
+          bottomNavigationBar: _BottomBar(state: state),
         );
       },
     );
@@ -321,9 +321,9 @@ class _BrightnessRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 日行/自动/爆闪的亮度是固件按传感器和节奏表定的,手动调没有意义
-    final adjustable =
-        state.mode == LightMode.white || state.mode == LightMode.yellow;
+    // 只有常亮模式的亮度是用户说了算。
+    // 日行是固定低亮度、自动看光敏、爆闪走节奏表,这三个手动调没有意义。
+    final adjustable = state.mode == LightMode.steady;
 
     return Opacity(
       opacity: adjustable ? 1 : 0.45,
@@ -357,10 +357,15 @@ class _BrightnessRow extends StatelessWidget {
   }
 }
 
-/// 底部模式条:日行 / 白光 / 黄光 / 自动 / 爆闪
-class _ModeBar extends StatelessWidget {
+/// 底部两层:上面挑【颜色】,下面挑【模式】。
+///
+/// 分成两层是刻意的 —— 这两件事本来就互不相干:
+/// 颜色决定灯发什么色,模式决定灯怎么个亮法,日行/自动/爆闪用的都是上面选中的颜色。
+/// 以前把白光/黄光和日行/自动/爆闪并排塞进一排单选,选了黄光再点日行,
+/// 颜色就被顶掉了。
+class _BottomBar extends StatelessWidget {
   final AppState state;
-  const _ModeBar({required this.state});
+  const _BottomBar({required this.state});
 
   @override
   Widget build(BuildContext context) {
@@ -371,20 +376,153 @@ class _ModeBar extends StatelessWidget {
       ),
       child: SafeArea(
         top: false,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(11, 10, 11, 8),
+              child: _ColorBar(state: state),
+            ),
+            const Divider(height: 1, color: AppColors.border),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              child: Row(
+                children: [
+                  for (final m in kModes)
+                    Expanded(
+                      child: _ModeButton(
+                        info: m,
+                        selected: state.mode == m.id,
+                        onTap: () => state.setMode(m.id),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 颜色:白光 / 黄光。切它不会打断当前模式。
+class _ColorBar extends StatelessWidget {
+  final AppState state;
+  const _ColorBar({required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    final off = state.mode == LightMode.off;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Opacity(
+          opacity: off ? 0.45 : 1,
           child: Row(
             children: [
-              for (final m in kModes)
-                Expanded(
-                  child: _ModeButton(
-                    info: m,
-                    selected: state.mode == m.id,
-                    onTap: () => state.setMode(m.id),
-                  ),
+              Expanded(
+                child: _ColorButton(
+                  label: '白光',
+                  icon: Icons.light_mode,
+                  color: AppColors.lightWhite,
+                  selected: !state.pickedYellow,
+                  onTap: () => state.setColor(LightColorId.white),
                 ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _ColorButton(
+                  label: '黄光',
+                  icon: Icons.wb_incandescent,
+                  color: AppColors.lightYellow,
+                  selected: state.pickedYellow,
+                  onTap: () => state.setColor(LightColorId.yellow),
+                ),
+              ),
             ],
           ),
+        ),
+        // 自动模式遇上下雨,设备会临时把颜色抢成黄光。
+        // 不解释一句的话,用户会以为这个开关坏了。
+        if (state.colorOverridden)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.water_drop, size: 13, color: Color(0xFF60A5FA)),
+                const SizedBox(width: 5),
+                Text(
+                  '检测到下雨,已临时转黄光',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: AppColors.textLo.withValues(alpha: 0.95),
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _ColorButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final Color color;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _ColorButton({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(vertical: 11),
+        decoration: BoxDecoration(
+          color: selected ? color.withValues(alpha: 0.16) : Colors.transparent,
+          borderRadius: BorderRadius.circular(11),
+          border: Border.all(
+            color: selected ? color.withValues(alpha: 0.75) : AppColors.border,
+            width: selected ? 1.4 : 1,
+          ),
+          boxShadow: selected
+              ? [
+                  BoxShadow(
+                    color: color.withValues(alpha: 0.22),
+                    blurRadius: 14,
+                    spreadRadius: -2,
+                  )
+                ]
+              : null,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 18, color: selected ? color : AppColors.textLo),
+            const SizedBox(width: 7),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13.5,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
+                color: selected ? color : AppColors.textLo,
+              ),
+            ),
+          ],
         ),
       ),
     );

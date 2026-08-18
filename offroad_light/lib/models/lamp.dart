@@ -140,17 +140,26 @@ LampGroup groupOf(int lampId) =>
     kGroups.firstWhere((g) => g.lampIds.contains(lampId));
 
 /// ══════════════════════════════════════════════════════════
-/// 工作模式
+/// 颜色和模式是【两个独立的维度】
 ///
-/// 编号必须和固件的 enum SysMode 一致。
+///   颜色:白 / 黄               —— 灯发什么色
+///   模式:常亮 / 日行 / 自动 / 爆闪 —— 灯怎么个亮法
+///
+/// 日行、爆闪、常亮用的都是当前选定的那个颜色;换颜色不打断当前模式,
+/// 切模式也不会把颜色弄丢。编号必须和固件的 enum 一致。
 /// ══════════════════════════════════════════════════════════
+
+class LightColorId {
+  static const white = 0;
+  static const yellow = 1;
+}
+
 class LightMode {
   static const off = 0;
-  static const drl = 1; // 日行
-  static const white = 2; // 白光
-  static const yellow = 3; // 黄光
-  static const auto = 4; // 自动
-  static const flash = 5; // 爆闪
+  static const steady = 1; // 常亮
+  static const drl = 2; // 日行
+  static const auto = 3; // 自动
+  static const flash = 4; // 爆闪
 }
 
 class ModeInfo {
@@ -158,19 +167,24 @@ class ModeInfo {
   final String name;
   final IconData icon;
 
-  /// 界面上这个模式的代表色。自动模式的实际颜色由车上的雨滴传感器决定,
-  /// 所以它显示成中性色,真实颜色以设备上报的为准。
+  /// 按钮选中时的强调色。这只是模式自己的辨识色,
+  /// 跟灯到底发什么颜色没有关系 —— 那由上面的白/黄开关决定。
   final Color color;
 
-  const ModeInfo(this.id, this.name, this.icon, this.color);
+  final String hint;
+
+  const ModeInfo(this.id, this.name, this.icon, this.color, this.hint);
 }
 
 const List<ModeInfo> kModes = [
-  ModeInfo(LightMode.drl, '日行', Icons.wb_twilight, Color(0xFFBFD4E6)),
-  ModeInfo(LightMode.white, '白光', Icons.light_mode, Color(0xFFF2F6FF)),
-  ModeInfo(LightMode.yellow, '黄光', Icons.wb_incandescent, Color(0xFFFFC53D)),
-  ModeInfo(LightMode.auto, '自动', Icons.auto_mode, Color(0xFF4DD0A0)),
-  ModeInfo(LightMode.flash, '爆闪', Icons.flash_on, Color(0xFFFF4D4D)),
+  ModeInfo(LightMode.steady, '常亮', Icons.lightbulb_circle, Color(0xFF7FB2FF),
+      '按设定亮度一直亮着'),
+  ModeInfo(LightMode.drl, '日行', Icons.wb_twilight, Color(0xFFBFD4E6),
+      '低亮度长亮,白天示宽用'),
+  ModeInfo(LightMode.auto, '自动', Icons.auto_mode, Color(0xFF4DD0A0),
+      '光敏定亮度,下雨临时转黄光'),
+  ModeInfo(LightMode.flash, '爆闪', Icons.flash_on, Color(0xFFFF4D4D),
+      '三连闪 + 间隔,警示用'),
 ];
 
 ModeInfo? modeInfo(int id) {
@@ -182,9 +196,8 @@ ModeInfo? modeInfo(int id) {
 
 String modeName(int id) => switch (id) {
       LightMode.off => '关灯',
+      LightMode.steady => '常亮',
       LightMode.drl => '日行',
-      LightMode.white => '白光',
-      LightMode.yellow => '黄光',
       LightMode.auto => '自动',
       LightMode.flash => '爆闪',
       _ => '未知',

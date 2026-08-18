@@ -26,9 +26,14 @@
  *   立柱上 = A 柱上【上面】那对圆灯
  *   车顶   = 行李架上那对横条灯
  *
- * 颜色不是灯位的属性，而是【模式】的属性：
- *   模式决定这一刻走黄光通道还是白光通道，灯位掩码决定哪几个灯位亮。
- *   两者正交 —— 切模式不会改变开着哪些灯，开关灯位也不会改变颜色。
+ * ── 三个互相独立的维度 ────────────────────────────────────
+ *   颜色 userColor：白光 / 黄光            —— 灯发什么色
+ *   模式 sysMode  ：常亮/日行/自动/爆闪    —— 灯怎么个亮法
+ *   灯位 lampMask ：8 位掩码               —— 哪几个灯位参与
+ *
+ * 三者正交：切模式不会把颜色弄丢，换颜色不打断当前模式，
+ * 开关灯位也不影响前两者。日行、爆闪、常亮全都用 userColor 这个色。
+ * 唯一例外：自动模式下遇到下雨会临时改成黄光，雨停自动还原。
  *
  * ── 硬件连接 ───────────────────────────────────────────────
  *   IO4  -> PCA9685 SDA        IO5  -> PCA9685 SCL
@@ -102,23 +107,34 @@ Preferences    prefs;            /* NVS：掉电记忆模式和灯位状态 */
 #define OP_GROUP         0x13    /* [groupId, on]     整组开关（两个灯位） */
 #define OP_BRIGHT        0x14    /* [duty 0~100]      手动亮度 */
 #define OP_QUERY         0x15    /* []                请求上报当前状态 */
+#define OP_COLOR         0x16    /* [color]           0=白光 1=黄光 */
 
 /* 设备 -> App（Notify） */
-#define OP_STATUS        0x20    /* [mode, mask, bright, color, night, rain, ver] */
+/* [mode, mask, bright, activeColor, night, rain, ver, userColor] */
+#define OP_STATUS        0x20
+
+/* ── 颜色和模式是两个【互相独立】的维度 ──────────────────
+ *
+ *   颜色(userColor)：白光 / 黄光 —— 灯发什么色
+ *   模式(sysMode)  ：常亮 / 日行 / 自动 / 爆闪 —— 灯怎么个亮法
+ *   灯位(lampMask) ：哪几个灯位参与
+ *
+ * 三者正交：切模式不会把颜色弄丢，换颜色也不会打断当前模式。
+ * 之前把白光/黄光和日行/自动/爆闪塞进同一个枚举，结果是
+ * 「选了黄光再点日行」颜色就没了，爆闪也只能沿用上一个模式的颜色。
+ */
 
 /* 模式编号 */
 enum SysMode {
   MODE_OFF    = 0,   /* 关灯 */
-  MODE_DRL    = 1,   /* 日行灯：白光低亮度 */
-  MODE_WHITE  = 2,   /* 白光常亮 */
-  MODE_YELLOW = 3,   /* 黄光常亮 */
-  MODE_AUTO   = 4,   /* 自动：光敏定亮度、雨滴定颜色 */
-  MODE_FLASH  = 5,   /* 爆闪 */
+  MODE_STEADY = 1,   /* 常亮：按 manualDuty 常亮 */
+  MODE_DRL    = 2,   /* 日行：低亮度常亮 */
+  MODE_AUTO   = 3,   /* 自动：光敏定亮度，下雨临时切黄光 */
+  MODE_FLASH  = 4,   /* 爆闪：按节奏表闪 */
   MODE_MAX
 };
 
-/* 当前实际输出的颜色通道（自动模式下会被雨滴改写，需要上报给 App 显示） */
-enum ActiveColor { COLOR_WHITE = 0, COLOR_YELLOW = 1 };
+enum LightColor { COLOR_WHITE = 0, COLOR_YELLOW = 1 };
 
 /* ==========================================================
  * 三、PCA9685 驱动（裸寄存器，无需第三方库）
@@ -215,10 +231,15 @@ static const FlashStep flashPattern[] = {
 };
 #define FLASH_STEPS (sizeof(flashPattern) / sizeof(flashPattern[0]))
 
-static SysMode     sysMode     = MODE_OFF;      /* 开机模式（会被 NVS 覆盖） */
-static uint8_t     lampMask    = 0xFF;          /* 8 个灯位的开关位图，默认全开 */
-static uint8_t     manualDuty  = 100;           /* 白光/黄光模式下的亮度 */
-static ActiveColor activeColor = COLOR_WHITE;   /* 当前实际输出的颜色通道 */
+static SysMode    sysMode    = MODE_STEADY;    /* 开机模式（会被 NVS 覆盖） */
+static uint8_t    lampMask   = 0xFF;           /* 8 个灯位的开关位图，默认全开 */
+static uint8_t    manualDuty = 100;            /* 常亮模式下的亮度 */
+
+/* 用户选的颜色：一直保持，切模式不会动它，存 NVS */
+static LightColor userColor = COLOR_WHITE;
+/* 这一刻真正输出的颜色：正常等于 userColor，
+   只有自动模式遇到下雨才临时改成黄光（穿透雨雾），雨停自动还原 */
+static LightColor activeColor = COLOR_WHITE;
 
 static float curYellow = 0.0f, curWhite = 0.0f; /* 渐变中的实际亮度 */
 
@@ -244,20 +265,27 @@ static void saveSettings() {
   prefs.putUChar("mode", (uint8_t)sysMode);
   prefs.putUChar("mask", lampMask);
   prefs.putUChar("duty", manualDuty);
-  Serial.printf("[NVS] 已保存 mode=%u mask=0x%02X duty=%u\n",
-                (unsigned)sysMode, lampMask, manualDuty);
+  prefs.putUChar("color", (uint8_t)userColor);
+  Serial.printf("[NVS] 已保存 mode=%u color=%s mask=0x%02X duty=%u\n",
+                (unsigned)sysMode,
+                userColor == COLOR_WHITE ? "白" : "黄",
+                lampMask, manualDuty);
 }
 
 static void loadSettings() {
   prefs.begin("spotlight", false);
-  /* 出厂默认：白光、全部灯位打开、100% —— 用户没设置过就是白光 */
-  uint8_t m = prefs.getUChar("mode", MODE_WHITE);
-  sysMode    = (m < MODE_MAX) ? (SysMode)m : MODE_WHITE;
+  /* 出厂默认：白光、常亮、全部灯位打开、100% —— 用户没设置过就是白光 */
+  uint8_t m = prefs.getUChar("mode", MODE_STEADY);
+  sysMode    = (m < MODE_MAX) ? (SysMode)m : MODE_STEADY;
   lampMask   = prefs.getUChar("mask", 0xFF);
   manualDuty = prefs.getUChar("duty", 100);
   if (manualDuty > 100) manualDuty = 100;
-  Serial.printf("[NVS] 已恢复 mode=%u mask=0x%02X duty=%u\n",
-                (unsigned)sysMode, lampMask, manualDuty);
+  userColor  = prefs.getUChar("color", COLOR_WHITE) ? COLOR_YELLOW : COLOR_WHITE;
+  activeColor = userColor;
+  Serial.printf("[NVS] 已恢复 mode=%u color=%s mask=0x%02X duty=%u\n",
+                (unsigned)sysMode,
+                userColor == COLOR_WHITE ? "白" : "黄",
+                lampMask, manualDuty);
 }
 
 /* ==========================================================
@@ -272,18 +300,19 @@ static bool               bleConnected = false;
 static void notifyStatus() {
   if (!bleConnected || txChar == nullptr) return;
 
-  uint8_t pkt[4 + 7];
+  uint8_t pkt[4 + 8];
   pkt[0] = PKT_MAGIC;
   pkt[1] = OP_STATUS;
   pkt[2] = 0;
-  pkt[3] = 7;
+  pkt[3] = 8;
   pkt[4] = (uint8_t)sysMode;
   pkt[5] = lampMask;
   pkt[6] = manualDuty;
-  pkt[7] = (uint8_t)activeColor;      /* 当前真实颜色，自动模式下会随雨滴变 */
+  pkt[7] = (uint8_t)activeColor;      /* 这一刻真实输出的颜色（自动模式遇雨会变） */
   pkt[8] = lightStable ? 1 : 0;       /* 1 = 夜晚 */
   pkt[9] = rainStable ? 0 : 1;        /* 1 = 正在下雨 */
   pkt[10] = FW_VERSION;
+  pkt[11] = (uint8_t)userColor;       /* 用户选的颜色，App 的白/黄切换按它显示 */
 
   txChar->setValue(pkt, sizeof(pkt));
   txChar->notify();
@@ -382,6 +411,17 @@ static void handlePacket(uint8_t op, const uint8_t *data, size_t len) {
       }
       break;
     }
+    case OP_COLOR: {
+      /* 只改颜色，不碰模式 —— 当前是日行就还是日行，是爆闪就还接着闪 */
+      if (len < 1) return;
+      LightColor c = data[0] ? COLOR_YELLOW : COLOR_WHITE;
+      if (userColor != c) {
+        userColor = c;
+        Serial.printf("[BLE] 颜色: %s\n", c == COLOR_WHITE ? "白光" : "黄光");
+        markDirty();
+      }
+      break;
+    }
     case OP_QUERY:
       statusDirty = true;              /* App 主动要一次当前状态 */
       break;
@@ -471,10 +511,13 @@ static bool asrReadCmd(char *out, size_t size) {
 
 /* 语音改的也是同一套状态，所以照样存 NVS + 上报手机 */
 static void handleVoice(const char *cmd) {
+  /* 白光/黄光只换颜色，不动模式 —— 和 App 上那个白/黄开关是同一个东西 */
   if (strstr(cmd, "WHT")) {
-    sysMode = MODE_WHITE;  Serial.println(">> 语音: 白光");
+    userColor = COLOR_WHITE;   Serial.println(">> 语音: 白光");
+    if (sysMode == MODE_OFF) sysMode = MODE_STEADY;   /* 关着灯说颜色，顺手点亮 */
   } else if (strstr(cmd, "YEL") || strstr(cmd, "RED")) {
-    sysMode = MODE_YELLOW; Serial.println(">> 语音: 黄光");
+    userColor = COLOR_YELLOW;  Serial.println(">> 语音: 黄光");
+    if (sysMode == MODE_OFF) sysMode = MODE_STEADY;
   } else if (strstr(cmd, "BLBL") || strstr(cmd, "BL")) {
     if (sysMode != MODE_FLASH) { flashIdx = 0; flashMs = 0; }
     sysMode = MODE_FLASH;  Serial.println(">> 语音: 爆闪");
@@ -485,7 +528,7 @@ static void handleVoice(const char *cmd) {
   } else if (strstr(cmd, "OFF")) {
     sysMode = MODE_OFF;    Serial.println(">> 语音: 关灯");
   } else if (strstr(cmd, "ON")) {
-    sysMode = MODE_WHITE;  Serial.println(">> 语音: 开灯");
+    sysMode = MODE_STEADY; Serial.println(">> 语音: 开灯");
   } else {
     Serial.print(">> [语音] 未匹配, HEX:");
     for (size_t i = 0; cmd[i]; i++) Serial.printf(" %02X", (uint8_t)cmd[i]);
@@ -519,12 +562,11 @@ void loop() {
   int curLight = debounceRead(PIN_LIGHT, lightStable, lightCnt);  /* 0=白天 1=黑夜 */
   int curRain  = debounceRead(PIN_RAIN,  rainStable,  rainCnt);   /* 0=下雨 1=干燥 */
 
-  /* 雨滴边沿：只在自动模式下抢颜色，手动选了白光/黄光就不许它乱改 */
+  /* 雨滴边沿：只有自动模式才让它抢颜色，其它模式一律听用户的 */
   if (curRain != lastRain) {
     if (sysMode == MODE_AUTO) {
-      Serial.println(curRain == 0 ? ">> [传感器] 下雨，切黄光穿透雨雾"
-                                  : ">> [传感器] 雨停，切回白光");
-      statusDirty = true;                        /* 只上报，不存 NVS */
+      Serial.println(curRain == 0 ? ">> [传感器] 下雨，临时切黄光穿透雨雾"
+                                  : ">> [传感器] 雨停，还原成所选颜色");
     }
     lastRain = curRain;
   }
@@ -539,39 +581,34 @@ void loop() {
   int  targetDuty  = 0;
   bool hardSwitch  = false;      /* 爆闪要硬切，不能走渐变 */
 
+  /* 颜色一律跟着用户选的走 —— 日行、爆闪、常亮全都用这个色。
+     唯一的例外在下面的自动模式里：下雨时临时改黄光。 */
+  activeColor = userColor;
+
   switch (sysMode) {
     case MODE_OFF:
       targetDuty = 0;
       reason = "Off";
       break;
 
+    case MODE_STEADY:
+      targetDuty = manualDuty;
+      reason = "Steady";
+      break;
+
     case MODE_DRL:
-      activeColor = COLOR_WHITE;
-      targetDuty  = DUTY_DRL;
+      targetDuty = DUTY_DRL;
       reason = "DRL";
       break;
 
-    case MODE_WHITE:
-      activeColor = COLOR_WHITE;
-      targetDuty  = manualDuty;
-      reason = "White";
-      break;
-
-    case MODE_YELLOW:
-      activeColor = COLOR_YELLOW;
-      targetDuty  = manualDuty;
-      reason = "Yellow";
-      break;
-
     case MODE_AUTO:
-      /* 光敏定亮度、雨滴定颜色 */
-      activeColor = (curRain == 0) ? COLOR_YELLOW : COLOR_WHITE;
-      targetDuty  = (curLight == 0) ? DUTY_DAY : DUTY_NIGHT;
+      /* 光敏定亮度。下雨临时切黄光穿透雨雾，雨停自动还原成用户选的颜色 */
+      targetDuty = (curLight == 0) ? DUTY_DAY : DUTY_NIGHT;
+      if (curRain == 0) activeColor = COLOR_YELLOW;
       reason = (curLight == 0) ? "Auto/Day" : "Auto/Night";
       break;
 
     case MODE_FLASH: {
-      /* 爆闪保持进入前的颜色，只按节奏表开关 */
       flashMs += TICK_MS;
       if (flashMs >= flashPattern[flashIdx].ms) {
         flashMs  = 0;
@@ -586,6 +623,13 @@ void loop() {
     default:
       targetDuty = 0;
       break;
+  }
+
+  /* 实际输出的颜色一变就上报，App 那边的显示才跟得上（比如雨天自动转黄） */
+  static LightColor lastActive = COLOR_WHITE;
+  if (activeColor != lastActive) {
+    lastActive  = activeColor;
+    statusDirty = true;
   }
 
   /* ---------- 3. 颜色路由 + 渐变 ---------- */
@@ -639,9 +683,10 @@ void loop() {
   logMs += TICK_MS;
   if (logMs >= 1000) {
     logMs = 0;
-    Serial.printf("Mode:%s Color:%s Mask:0x%02X Light:%s Rain:%s BLE:%s | Y:%d%% W:%d%%\n",
+    Serial.printf("Mode:%s Color:%s(选%s) Mask:0x%02X Light:%s Rain:%s BLE:%s | Y:%d%% W:%d%%\n",
                   reason,
                   (activeColor == COLOR_WHITE) ? "White" : "Yellow",
+                  (userColor == COLOR_WHITE) ? "W" : "Y",
                   lampMask,
                   curLight ? "Night" : "Day",
                   curRain  ? "Dry"   : "Rain",

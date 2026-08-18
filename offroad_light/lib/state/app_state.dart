@@ -27,14 +27,17 @@ class AppState extends ChangeNotifier {
   ConnState conn = ConnState.disconnected;
   String statusLog = '';
 
-  // ---- 灯光状态(默认值 = 固件的出厂默认:白光、全部灯位打开) ----
-  int mode = LightMode.white;
+  // ---- 灯光状态(默认值 = 固件的出厂默认:白光常亮、全部灯位打开) ----
+  int mode = LightMode.steady;
   int lampMask = 0xFF;
   int brightness = 100;
 
-  /// 当前实际输出的颜色,0=白 1=黄。
-  /// 自动模式下由车上的雨滴传感器决定,只能由设备告诉我们。
-  int activeColor = 0;
+  /// 用户【选定】的颜色,0=白 1=黄。白/黄那个切换开关显示的是它。
+  int userColor = LightColorId.white;
+
+  /// 这一刻【实际输出】的颜色。正常等于 userColor,
+  /// 只有自动模式遇上下雨才被设备临时改成黄光 —— 车图上的发光颜色用它。
+  int activeColor = LightColorId.white;
 
   bool night = false;
   bool rain = false;
@@ -42,7 +45,15 @@ class AppState extends ChangeNotifier {
   /// 是否收到过设备的状态上报。没连上时界面显示的只是上次的记忆值。
   bool synced = false;
 
-  bool get isYellow => activeColor == 1;
+  /// 灯这一刻是不是黄的(界面配色跟着它走)
+  bool get isYellow => activeColor == LightColorId.yellow;
+
+  /// 用户选的是不是黄光(白/黄开关的位置跟着它走)
+  bool get pickedYellow => userColor == LightColorId.yellow;
+
+  /// 自动模式下雨滴把颜色抢走了 —— 界面要说明一下为什么和所选的不一样
+  bool get colorOverridden => activeColor != userColor;
+
   bool get isConnected => conn == ConnState.connected;
 
   // ---- 上次连接的设备,下次打开自动连回去 ----
@@ -66,6 +77,7 @@ class AppState extends ChangeNotifier {
     lampMask = s.lampMask;
     brightness = s.brightness;
     activeColor = s.color;
+    userColor = s.userColor;
     night = s.night;
     rain = s.rain;
     synced = true;
@@ -95,14 +107,26 @@ class AppState extends ChangeNotifier {
 
   // ---- 操作(乐观更新 + 下发) ----
 
+  /// 只切模式,不动颜色
   void setMode(int m) {
     mode = m;
-    // 白光/黄光模式下界面颜色可以立刻确定;自动模式要等设备按雨滴传感器上报
-    if (m == LightMode.yellow) activeColor = 1;
-    if (m == LightMode.white || m == LightMode.drl) activeColor = 0;
+    // 除了自动模式(颜色可能被雨滴抢走),其它模式的颜色就是用户选的那个
+    if (m != LightMode.auto) activeColor = userColor;
     notifyListeners();
     ble?.send(Protocol.mode(m));
   }
+
+  /// 只切颜色,不动模式 —— 日行/爆闪/常亮都会立刻换成这个颜色
+  void setColor(int c) {
+    userColor = c;
+    // 自动模式下雨时颜色归传感器管,这里不抢,等设备上报
+    if (mode != LightMode.auto) activeColor = c;
+    notifyListeners();
+    ble?.send(Protocol.color(c));
+  }
+
+  void toggleColor() => setColor(
+      pickedYellow ? LightColorId.white : LightColorId.yellow);
 
   void toggleLamp(int id) {
     final on = !isLampOn(id);
@@ -136,7 +160,7 @@ class AppState extends ChangeNotifier {
     ble?.send(Protocol.brightness(brightness));
   }
 
-  /// 总开关:关灯 <-> 回到上一次的常亮模式
+  /// 总开关:关灯 <-> 回到关灯前的那个模式
   void togglePower() {
     if (mode == LightMode.off) {
       setMode(_lastLitMode);
@@ -146,7 +170,7 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  int _lastLitMode = LightMode.white;
+  int _lastLitMode = LightMode.steady;
 
   /// 界面重新拉一次设备状态(下拉刷新 / 重连之后)
   void refresh() => ble?.send(Protocol.query());

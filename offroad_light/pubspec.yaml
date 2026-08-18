@@ -20,6 +20,7 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
 
 flutter:
   uses-material-design: true
@@ -28,3 +29,23 @@ flutter:
     # 车辆实拍图。把那张 Jeep 图存成 assets/images/car.png 就会自动用上；
     # 没放图也不会崩，界面会提示你把图放到哪里。
     - assets/images/
+    # assets/icon/ 不用声明：那张图只是生成启动图标的原料，
+    # 声明了反而会白白打进 APK 里多占 1.4MB。
+
+# ============ 应用图标 ============
+# 换了图标之后要重新生成，然后把生成的 PNG 一起提交：
+#   dart run flutter_launcher_icons
+# 云端 CI 只跑 pub get + build，不会替你生成图标。
+flutter_launcher_icons:
+  image_path: "assets/icon/icon.png"
+  android: "ic_launcher"
+  ios: false                        # 这个工程只做安卓，没有 ios/ 目录，开着会直接报错
+  # Android 8+ 的自适应图标：底色取图片自身的近黑背景，
+  # 前景直接用原图 —— 射灯占了画面中间约 65%，正好落在安全区(66%)内，
+  # 被圆形遮罩裁掉的只是四周的黑色渐变，不影响观感。
+  adaptive_icon_background: "#0E0E10"
+  adaptive_icon_foreground: "assets/icon/icon.png"
+  # inset 必须是 0。默认的 16% 会把原图连同它自带的圆角边框一起缩小，
+  # 结果是"图标里套着个小图标"，四周露出一圈黑底，很难看。
+  # 这张图的射灯本来就只占中间 65%，已经落在安全区(66%)内，不需要再缩。
+  adaptive_icon_foreground_inset: 0
