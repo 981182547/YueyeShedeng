@@ -12,7 +12,7 @@
 #   3. 跑完在该次运行页面底部 Artifacts 下载 SPOTLIGHT-android，直接装手机。
 # ============================================================
 
-name: 构建 Android APK
+name: 构建 Android + iOS
 
 on:
   push:
@@ -101,4 +101,65 @@ jobs:
         with:
           name: SPOTLIGHT-android
           path: offroad_light/build/app/outputs/flutter-apk/*.apk
+          retention-days: 30
+
+  # ---------------- iOS（未签名） ----------------
+  #
+  # 产出的是【未签名】IPA，只能用 Sideloadly / AltStore 之类的工具侧载自测，
+  # 装不进 App Store。上架要等客户的开发者账号下来，配好证书后再改成签名构建。
+  #
+  # macOS runner 对公开仓库免费，所以不用买 Mac 也能出包。
+  ios:
+    name: 构建 iOS IPA(未签名)
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    defaults:
+      run:
+        working-directory: offroad_light
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: 拉取依赖
+        run: flutter pub get
+
+      - name: 编译 iOS(不签名)
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter build ios --release --no-codesign 2>&1 | tee /tmp/build-ios.log
+
+      # 未签名产物手工套一层 Payload 目录压成 ipa，侧载工具认这个结构
+      - name: 打包成 .ipa
+        run: |
+          mkdir -p build/ios/ipa/Payload
+          cp -r build/ios/iphoneos/Runner.app build/ios/ipa/Payload/
+          cd build/ios/ipa
+          zip -r -q SPOTLIGHT-unsigned.ipa Payload
+          rm -rf Payload
+          ls -lh SPOTLIGHT-unsigned.ipa
+
+      - name: 失败时暴露报错
+        if: failure()
+        shell: bash
+        run: |
+          [ -f /tmp/build-ios.log ] && tail -c 5000 /tmp/build-ios.log
+          msg=$(cat /tmp/build-ios.log 2>/dev/null \
+                | grep -iE "^(error|fatal)|error:|Exception|not found|failed" \
+                | tail -20 | tr '\n' '~')
+          echo "::error::${msg:-没匹配到错误行，见上面的日志尾部}"
+
+      - name: 上传 IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: SPOTLIGHT-ios-unsigned
+          path: offroad_light/build/ios/ipa/*.ipa
           retention-days: 30
