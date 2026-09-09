@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../ble/ble_manager.dart';
 import '../ble/protocol.dart';
+import '../i18n/strings.dart';
 import '../models/lamp.dart';
 
 enum ConnState { disconnected, connecting, connected }
@@ -19,10 +20,35 @@ class AppState extends ChangeNotifier {
   final SharedPreferences prefs;
   AppState(this.prefs);
 
-  static Future<AppState> create() async =>
-      AppState(await SharedPreferences.getInstance());
+  static Future<AppState> create() async {
+    final st = AppState(await SharedPreferences.getInstance());
+    st.loadLang(); // 启动就恢复上次选的语言,免得先闪一下中文再跳成英文
+    return st;
+  }
 
   BleManager? ble;
+
+  // ---- 语言 ----
+  /// 界面语言,由顶栏那个按钮切换,选择会记住。
+  AppLang lang = AppLang.zh;
+
+  /// 当前语言的文案表。界面层一律用 `state.s.xxx` 取文字。
+  S get s => S(lang);
+
+  void loadLang() {
+    lang = prefs.getString('lang') == 'en' ? AppLang.en : AppLang.zh;
+  }
+
+  void setLang(AppLang l) {
+    if (lang == l) return;
+    lang = l;
+    prefs.setString('lang', l == AppLang.en ? 'en' : 'zh');
+    notifyListeners();
+  }
+
+  /// 顶栏按钮:中文 <-> English 来回切
+  void toggleLang() =>
+      setLang(lang == AppLang.zh ? AppLang.en : AppLang.zh);
 
   ConnState conn = ConnState.disconnected;
   String statusLog = '';

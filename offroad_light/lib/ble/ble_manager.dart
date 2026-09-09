@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../i18n/strings.dart';
 import 'protocol.dart';
 
 enum Conn { disconnected, scanning, connecting, connected }
@@ -25,8 +26,17 @@ class BleManager {
   /// 收到射灯主动上报的数据(Notify)
   final void Function(int op, List<int> payload)? onDeviceMessage;
 
+  /// 取当前语言的文案表。
+  ///
+  /// 传的是【函数】不是 S 实例:用户切语言之后,这里之后再产生的提示
+  /// 也要跟着变。存一份实例的话会一直用连接时那个语言。
+  final S Function() strings;
+
+  S get _s => strings();
+
   BleManager({
     required this.onState,
+    required this.strings,
     this.onLog = _noop,
     this.onScanUpdate,
     this.onRemember,
@@ -53,9 +63,10 @@ class BleManager {
   BluetoothDevice? get connectedDevice =>
       _state == Conn.connected ? _device : null;
 
-  String get deviceLabel {
+  /// 当前设备的显示名(没名字就退回设备 ID),没连时为 null
+  String? get deviceLabel {
     final d = _device;
-    if (d == null) return '未连接';
+    if (d == null) return null;
     return d.platformName.isEmpty ? d.remoteId.str : d.platformName;
   }
 
@@ -120,14 +131,14 @@ class BleManager {
     }
   }
 
-  static String describeAdapter(BluetoothAdapterState s) => switch (s) {
-        BluetoothAdapterState.on => '已开启',
-        BluetoothAdapterState.off => '已关闭',
-        BluetoothAdapterState.turningOn => '正在开启',
-        BluetoothAdapterState.turningOff => '正在关闭',
-        BluetoothAdapterState.unauthorized => '未授权',
-        BluetoothAdapterState.unavailable => '不支持',
-        _ => '未知',
+  static String describeAdapter(S s, BluetoothAdapterState st) => switch (st) {
+        BluetoothAdapterState.on => s.adapterOn(),
+        BluetoothAdapterState.off => s.adapterOff(),
+        BluetoothAdapterState.turningOn => s.adapterTurningOn(),
+        BluetoothAdapterState.turningOff => s.adapterTurningOff(),
+        BluetoothAdapterState.unauthorized => s.adapterUnauthorized(),
+        BluetoothAdapterState.unavailable => s.adapterUnavailable(),
+        _ => s.adapterUnknown(),
       };
 
   /// 需要用户去系统设置里手动授权(iOS 拒绝过蓝牙权限后无法再次弹窗)
@@ -137,7 +148,7 @@ class BleManager {
 
   Future<bool> _ensureReady() async {
     if (await FlutterBluePlus.isSupported == false) {
-      _log('这台手机不支持蓝牙');
+      _log(_s.bleUnsupported);
       return false;
     }
 
@@ -146,7 +157,7 @@ class BleManager {
     // 先查状态会得到 unknown,误判成"蓝牙未开启"而直接放弃。
     if (!await hasPermissions()) {
       if (!await requestPermissions()) {
-        _log('需要蓝牙和位置权限才能搜索射灯(请在系统设置里开启)');
+        _log(_s.blePermissionNeeded);
         return false;
       }
     }
@@ -156,15 +167,15 @@ class BleManager {
     final st = await adapterState();
     if (st == BluetoothAdapterState.unauthorized) {
       needsSystemSettings = true;
-      _log('蓝牙权限被拒绝,请到系统设置里允许本 App 使用蓝牙');
+      _log(_s.bleUnauthorized);
       return false;
     }
     if (st == BluetoothAdapterState.unavailable) {
-      _log('这台手机不支持蓝牙');
+      _log(_s.bleUnsupported);
       return false;
     }
     if (st != BluetoothAdapterState.on) {
-      _log('蓝牙${describeAdapter(st)},请打开蓝牙后重试');
+      _log(_s.bleAdapterOff(describeAdapter(_s, st)));
       return false;
     }
     needsSystemSettings = false;
@@ -183,7 +194,7 @@ class BleManager {
     scanResults.clear();
     onScanUpdate?.call();
     _setState(Conn.scanning);
-    _log('正在搜索射灯…');
+    _log(_s.bleScanning);
 
     await _scanSub?.cancel();
     // 用 scanResults(保留结果)而不是 onScanResults:
@@ -203,7 +214,7 @@ class BleManager {
         }
         if (results.isNotEmpty) onScanUpdate?.call();
       },
-      onError: (e) => _log('扫描出错: $e'),
+      onError: (e) => _log(_s.bleScanError(e)),
     );
 
     try {
@@ -212,14 +223,14 @@ class BleManager {
       // 一过滤就什么都扫不到。列表里会把射灯排在最前面。
       await FlutterBluePlus.startScan(timeout: timeout);
     } catch (e) {
-      _log('扫描失败: $e');
+      _log(_s.bleScanFailed(e));
     }
 
     if (_state == Conn.scanning) {
       if (scanResults.isEmpty) {
-        _log('没有找到设备,请确认射灯控制器已上电');
+        _log(_s.bleNoneFound);
       } else {
-        _log('找到 ${scanResults.length} 个设备,点击选择');
+        _log(_s.bleFoundN(scanResults.length));
       }
       _setState(Conn.disconnected);
     }
@@ -249,7 +260,7 @@ class BleManager {
 
     final found = scanResults.where(isSpotlight);
     if (found.isEmpty) {
-      _log('附近没有识别到射灯,请手动选择');
+      _log(_s.bleNotFoundNearby);
       return;
     }
     await connectTo(found.first.device);
@@ -262,8 +273,9 @@ class BleManager {
 
     _setState(Conn.connecting);
     _device = device;
-    final name = device.platformName.isEmpty ? '设备' : device.platformName;
-    _log('正在连接 $name…');
+    final name =
+        device.platformName.isEmpty ? _s.unknownDevice : device.platformName;
+    _log(_s.bleConnectingTo(name));
 
     try {
       await device.connect(timeout: const Duration(seconds: 15));
@@ -273,7 +285,7 @@ class BleManager {
         _mtu = await device.requestMtu(185).timeout(const Duration(seconds: 5));
       } catch (e) {
         _mtu = 23;
-        _log('MTU 协商跳过,用默认 23');
+        _log(_s.bleMtuSkipped);
       }
 
       final services =
@@ -296,11 +308,11 @@ class BleManager {
           }
           if (rx != null) break;
         }
-        if (rx != null) _log('未找到标准写特征,改用 ${rx.uuid}');
+        if (rx != null) _log(_s.bleFallbackWrite(rx.uuid));
       }
 
       if (rx == null) {
-        _log('未找到可写特征,断开');
+        _log(_s.bleNoWritable);
         await disconnect();
         return;
       }
@@ -315,7 +327,7 @@ class BleManager {
       _connSub = device.connectionState.listen((s) {
         if (s == BluetoothConnectionState.disconnected &&
             _state == Conn.connected) {
-          _log('射灯已断开');
+          _log(_s.bleLost);
           _cleanup();
           _setState(Conn.disconnected);
           if (!_manualDisconnect) _scheduleReconnect();
@@ -328,15 +340,15 @@ class BleManager {
       onRemember?.call(_lastDeviceId!);
 
       _setState(Conn.connected);
-      _log('已连接');
+      _log(_s.bleConnected);
 
       // 连上先问一次当前状态,把界面同步成设备的真实状态
       await send(Protocol.query());
     } on TimeoutException {
-      _log('连接超时,请重试');
+      _log(_s.bleTimeout);
       await disconnect();
     } catch (e) {
-      _log('连接失败: $e');
+      _log(_s.bleConnectFailed(e));
       await disconnect();
     }
   }
@@ -358,7 +370,7 @@ class BleManager {
       }
     }
     if (tx == null) {
-      _log('未找到状态上报特征,车上改了状态手机不会自动刷新');
+      _log(_s.bleNoNotify);
       return;
     }
     try {
@@ -370,7 +382,7 @@ class BleManager {
       await tx.setNotifyValue(true);
       notifyReady = true;
     } catch (e) {
-      _log('订阅状态上报失败: $e');
+      _log(_s.bleNotifyFailed(e));
     }
   }
 
@@ -406,7 +418,7 @@ class BleManager {
     const backoff = [2, 4, 8, 15, 30];
     final delay = backoff[_retry < backoff.length ? _retry : backoff.length - 1];
     _retry++;
-    _log('$delay 秒后尝试重连…');
+    _log(_s.bleRetryIn(delay));
     _retryTimer = Timer(Duration(seconds: delay), () {
       if (_state == Conn.disconnected) reconnectLast();
     });
@@ -420,7 +432,7 @@ class BleManager {
     try {
       await connectTo(BluetoothDevice.fromId(id));
     } catch (e) {
-      _log('重连失败: $e');
+      _log(_s.bleRetryFailed(e));
       _scheduleReconnect();
     }
   }
@@ -429,7 +441,7 @@ class BleManager {
   Future<void> tryAutoConnect(String? savedId) async {
     if (savedId == null || savedId.isEmpty) return;
     _lastDeviceId = savedId;
-    _log('正在自动连接上次的射灯…');
+    _log(_s.bleAutoConnecting);
     await reconnectLast();
   }
 
@@ -437,7 +449,7 @@ class BleManager {
   Future<void> send(Uint8List msg) {
     if (_state != Conn.connected) return Future.value();
     _writeChain = _writeChain.then((_) => _write(msg)).catchError((e) {
-      _log('发送失败: $e');
+      _log(_s.bleSendFailed(e));
     });
     return _writeChain;
   }

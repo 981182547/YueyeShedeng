@@ -36,6 +36,8 @@ class _SpotlightAppState extends State<SpotlightApp> {
     super.initState();
 
     state.ble = BleManager(
+      // 传函数不传实例:切了语言之后新弹的提示也要跟着变
+      strings: () => state.s,
       onState: (c) {
         state.setConn(switch (c) {
           Conn.connected => ConnState.connected,

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 
+import '../i18n/strings.dart';
 import '../models/lamp.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
@@ -15,16 +16,19 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = state.s;
     return ListenableBuilder(
       listenable: state,
       builder: (context, _) {
         return Scaffold(
           appBar: AppBar(
-            title: const Text('SPOTLIGHT'),
+            title: Text(s.appTitle),
             actions: [
+              _LangChip(state: state),
+              const SizedBox(width: 6),
               _ConnChip(state: state),
               IconButton(
-                tooltip: state.mode == LightMode.off ? '开灯' : '关灯',
+                tooltip: state.mode == LightMode.off ? s.turnOn : s.turnOff,
                 icon: Icon(
                   Icons.power_settings_new,
                   color: state.mode == LightMode.off
@@ -34,7 +38,7 @@ class HomeScreen extends StatelessWidget {
                 onPressed: state.togglePower,
               ),
               IconButton(
-                tooltip: '蓝牙设备',
+                tooltip: s.devices,
                 icon: Icon(
                   state.isConnected
                       ? Icons.bluetooth_connected
@@ -80,7 +84,7 @@ class HomeScreen extends StatelessWidget {
                       ),
                     ),
                     icon: const Icon(Icons.tune, size: 18),
-                    label: const Text('单灯控制'),
+                    label: Text(s.singleLamp),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: AppColors.textHi,
                       side: const BorderSide(color: AppColors.border),
@@ -98,6 +102,49 @@ class HomeScreen extends StatelessWidget {
   }
 }
 
+/// 中英切换。
+///
+/// 样式刻意照着旁边的连接状态胶囊做:同样的圆角、同样的字号、同样的内边距,
+/// 看起来是一套的。只是配色用中性灰 —— 连接状态才是需要一眼看到的信息,
+/// 语言按钮不该抢它的注意力。
+///
+/// 显示的是【当前】语言:中文界面显示「中」,英文界面显示「EN」,点一下就换。
+class _LangChip extends StatelessWidget {
+  final AppState state;
+  const _LangChip({required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    final zh = state.lang == AppLang.zh;
+    return GestureDetector(
+      onTap: state.toggleLang,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: AppColors.textLo.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.language, size: 13, color: AppColors.textLo),
+            const SizedBox(width: 5),
+            Text(
+              zh ? '中' : 'EN',
+              style: const TextStyle(
+                fontSize: 12,
+                color: AppColors.textHi,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// AppBar 上的连接状态小圆点。
 ///
 /// state 必须当参数传进来,不能用 InheritedWidget 去取:
@@ -110,10 +157,11 @@ class _ConnChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = state.s;
     final (color, text) = switch (state.conn) {
-      ConnState.connected => (AppColors.online, '已连接'),
-      ConnState.connecting => (Colors.amber, '连接中'),
-      ConnState.disconnected => (AppColors.offline, '未连接'),
+      ConnState.connected => (AppColors.online, s.connected),
+      ConnState.connecting => (Colors.amber, s.connecting),
+      ConnState.disconnected => (AppColors.offline, s.disconnected),
     };
 
     return GestureDetector(
@@ -155,6 +203,7 @@ class _StatusBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = state.s;
     final lightColor =
         state.isYellow ? AppColors.lightYellow : AppColors.lightWhite;
     final off = state.mode == LightMode.off;
@@ -187,7 +236,7 @@ class _StatusBar extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           Text(
-            modeName(state.mode),
+            modeName(s, state.mode),
             style: const TextStyle(
               color: AppColors.textHi,
               fontSize: 14,
@@ -196,12 +245,12 @@ class _StatusBar extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Text(
-            off ? '' : (state.isYellow ? '黄光' : '白光'),
+            off ? '' : (state.isYellow ? s.yellow : s.white),
             style: const TextStyle(color: AppColors.textLo, fontSize: 12.5),
           ),
           const Spacer(),
           Text(
-            '${state.onCount}/8 灯位',
+            s.lampCount(state.onCount, kLamps.length),
             style: const TextStyle(color: AppColors.textLo, fontSize: 12.5),
           ),
           // 传感器状态:自动模式下这两个决定了灯的亮度和颜色
@@ -245,6 +294,7 @@ class _GroupCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = state.s;
     final on = state.isGroupOn(group);
     final partial = state.isGroupPartial(group);
     final lightColor =
@@ -276,7 +326,7 @@ class _GroupCard extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              group.name,
+              groupName(s, group.id),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
@@ -287,7 +337,7 @@ class _GroupCard extends StatelessWidget {
             ),
             const SizedBox(height: 2),
             Text(
-              partial ? '半开' : (on ? '开' : '关'),
+              partial ? s.partial : (on ? s.on : s.off),
               style: TextStyle(
                 fontSize: 10.5,
                 color: active ? lightColor : AppColors.offline,
@@ -311,6 +361,7 @@ class _BrightnessBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = state.s;
     // 只有常亮模式的亮度是用户说了算。
     // 日行是固定低亮度、自动看光敏、爆闪走节奏表,这三个手动调没有意义。
     final adjustable = state.mode == LightMode.steady;
@@ -377,7 +428,7 @@ class _BrightnessBar extends StatelessWidget {
                             color: off ? AppColors.textLo : lightColor),
                         const SizedBox(width: 10),
                         Text(
-                          '亮度',
+                          s.brightness,
                           style: TextStyle(
                             fontSize: 13.5,
                             color: AppColors.textHi.withValues(alpha: 0.9),
@@ -446,6 +497,7 @@ class _BottomBar extends StatelessWidget {
                     Expanded(
                       child: _ModeButton(
                         info: m,
+                        s: state.s,
                         selected: state.mode == m.id,
                         onTap: () => state.setMode(m.id),
                       ),
@@ -467,6 +519,7 @@ class _ColorBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = state.s;
     final off = state.mode == LightMode.off;
 
     return Column(
@@ -478,7 +531,7 @@ class _ColorBar extends StatelessWidget {
             children: [
               Expanded(
                 child: _ColorButton(
-                  label: '白光',
+                  label: s.white,
                   icon: Icons.light_mode,
                   color: AppColors.lightWhite,
                   selected: !state.pickedYellow,
@@ -488,7 +541,7 @@ class _ColorBar extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: _ColorButton(
-                  label: '黄光',
+                  label: s.yellow,
                   icon: Icons.wb_incandescent,
                   color: AppColors.lightYellow,
                   selected: state.pickedYellow,
@@ -509,7 +562,7 @@ class _ColorBar extends StatelessWidget {
                 const Icon(Icons.water_drop, size: 13, color: Color(0xFF60A5FA)),
                 const SizedBox(width: 5),
                 Text(
-                  '检测到下雨,已临时转黄光',
+                  s.rainOverride,
                   style: TextStyle(
                     fontSize: 11.5,
                     color: AppColors.textLo.withValues(alpha: 0.95),
@@ -588,8 +641,12 @@ class _ModeButton extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
+  /// 这个按钮不持有 state,文案表直接传进来
+  final S s;
+
   const _ModeButton({
     required this.info,
+    required this.s,
     required this.selected,
     required this.onTap,
   });
@@ -624,7 +681,7 @@ class _ModeButton extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              info.name,
+              modeName(s, info.id),
               style: TextStyle(
                 fontSize: 11.5,
                 fontWeight: selected ? FontWeight.w600 : FontWeight.w400,

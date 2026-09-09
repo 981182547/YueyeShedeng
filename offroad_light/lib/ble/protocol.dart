@@ -116,7 +116,7 @@ class DeviceStatus {
   @override
   String toString() =>
       'DeviceStatus(mode:$mode mask:0x${lampMask.toRadixString(16)} '
-      'bright:$brightness color:${isYellow ? "黄" : "白"} '
-      'userColor:${userColor == 1 ? "黄" : "白"} '
+      'bright:$brightness color:${isYellow ? "Y" : "W"} '
+      'userColor:${userColor == 1 ? "Y" : "W"} '
       'night:$night rain:$rain)';
 }

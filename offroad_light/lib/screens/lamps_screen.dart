@@ -14,22 +14,23 @@ class LampsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = state.s;
     return ListenableBuilder(
       listenable: state,
       builder: (context, _) {
         return Scaffold(
           appBar: AppBar(
-            title: const Text('单灯控制'),
+            title: Text(s.singleLamp),
             actions: [
               TextButton(
                 onPressed: state.allOn,
-                child: const Text('全开',
-                    style: TextStyle(color: AppColors.textHi)),
+                child: Text(s.allOn,
+                    style: const TextStyle(color: AppColors.textHi)),
               ),
               TextButton(
                 onPressed: state.allOff,
-                child: const Text('全关',
-                    style: TextStyle(color: AppColors.textLo)),
+                child: Text(s.allOff,
+                    style: const TextStyle(color: AppColors.textLo)),
               ),
               const SizedBox(width: 4),
             ],
@@ -40,7 +41,7 @@ class LampsScreen extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
-                  '点车图上的光点,或用下面的开关,单独控制每一只灯',
+                  s.singleLampHint,
                   style: TextStyle(
                     fontSize: 12.5,
                     color: AppColors.textLo.withValues(alpha: 0.9),
@@ -96,6 +97,7 @@ class _GroupSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = state.s;
     final lightColor =
         state.isYellow ? AppColors.lightYellow : AppColors.lightWhite;
 
@@ -117,7 +119,7 @@ class _GroupSection extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      group.name,
+                      groupName(s, group.id),
                       style: const TextStyle(
                         fontSize: 14.5,
                         fontWeight: FontWeight.w600,
@@ -125,7 +127,7 @@ class _GroupSection extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      group.subtitle,
+                      groupSubtitle(s, group.id),
                       style: const TextStyle(
                           fontSize: 11.5, color: AppColors.textLo),
                     ),
@@ -133,7 +135,7 @@ class _GroupSection extends StatelessWidget {
                 ),
                 const Spacer(),
                 Text(
-                  state.isGroupPartial(group) ? '半开' : '',
+                  state.isGroupPartial(group) ? s.partial : '',
                   style: const TextStyle(fontSize: 11, color: AppColors.textLo),
                 ),
                 _lightSwitch(
@@ -172,6 +174,7 @@ class _LampTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = state.s;
     final on = state.isLampOn(lamp.id);
     final lit = state.isLampLit(lamp.id);
     final lightColor =
@@ -214,7 +217,7 @@ class _LampTile extends StatelessWidget {
             ),
           ),
           title: Text(
-            lamp.name,
+            lampName(s, lamp.id),
             style: TextStyle(
               fontSize: 14,
               color: on ? AppColors.textHi : AppColors.textLo,
@@ -222,7 +225,7 @@ class _LampTile extends StatelessWidget {
           ),
           subtitle: Text(
             // 通道号照着固件的映射写,接线或调试时直接对得上
-            '黄光 CH${lamp.id}  ·  白光 CH${lamp.id + 8}',
+            s.channels(lamp.id, lamp.id + 8),
             style: const TextStyle(fontSize: 11, color: AppColors.textLo),
           ),
           trailing: _lightSwitch(

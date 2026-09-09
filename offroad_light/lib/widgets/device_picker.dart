@@ -52,6 +52,7 @@ class _DeviceSheetState extends State<_DeviceSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final s = widget.ble.strings();
     // 射灯优先,其次按信号强度排序;没名字的设备沉底
     final list = [...widget.ble.scanResults]..sort((a, b) {
         final pa = BleManager.isSpotlight(a) ? 0 : 1;
@@ -72,7 +73,7 @@ class _DeviceSheetState extends State<_DeviceSheet> {
           children: [
             Row(
               children: [
-                const Text('选择射灯控制器',
+                Text(s.pickDevice,
                     style: TextStyle(
                         fontSize: 17,
                         fontWeight: FontWeight.w600,
@@ -87,7 +88,7 @@ class _DeviceSheetState extends State<_DeviceSheet> {
                   IconButton(
                     icon: const Icon(Icons.refresh),
                     onPressed: _scan,
-                    tooltip: '重新搜索',
+                    tooltip: s.rescan,
                   ),
               ],
             ),
@@ -100,7 +101,7 @@ class _DeviceSheetState extends State<_DeviceSheet> {
                   ? Padding(
                       padding: const EdgeInsets.symmetric(vertical: 32),
                       child: Text(
-                        _scanning ? '正在搜索…' : '没找到设备,确认控制器已上电',
+                        _scanning ? s.scanningShort : s.noDeviceFound,
                         textAlign: TextAlign.center,
                         style: const TextStyle(color: AppColors.textLo),
                       ),
@@ -120,10 +121,11 @@ class _DeviceSheetState extends State<_DeviceSheet> {
   }
 
   Widget _tile(ScanResult r) {
+    final s = widget.ble.strings();
     final ours = BleManager.isSpotlight(r);
     final name = r.device.platformName.isEmpty
         ? (r.advertisementData.advName.isEmpty
-            ? '未知设备'
+            ? s.unknownDevice
             : r.advertisementData.advName)
         : r.device.platformName;
 
@@ -148,7 +150,7 @@ class _DeviceSheetState extends State<_DeviceSheet> {
                 color: AppColors.accent.withValues(alpha: 0.18),
                 borderRadius: BorderRadius.circular(4),
               ),
-              child: const Text('射灯',
+              child: Text(s.spotlightBadge,
                   style: TextStyle(fontSize: 10, color: AppColors.accent)),
             ),
         ],

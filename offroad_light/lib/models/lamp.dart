@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../i18n/strings.dart';
+
 /// 灯位在车图上的形状:车顶是横向灯条,其余是圆形射灯
 enum LampShape { round, bar }
 
@@ -15,7 +17,6 @@ enum LampShape { round, bar }
 /// 这样换手机、换分辨率都不用改,图片怎么缩放热区都跟得上。
 class Lamp {
   final int id;
-  final String name;
   final double x;
   final double y;
   final double size; // 相对图片宽度的尺寸
@@ -30,7 +31,6 @@ class Lamp {
 
   const Lamp({
     required this.id,
-    required this.name,
     required this.x,
     required this.y,
     required this.size,
@@ -50,16 +50,9 @@ class Lamp {
 /// 组编号也要和固件对齐:固件里 组 g 控制的是灯位 g*2 和 g*2+1。
 class LampGroup {
   final int id;
-  final String name;
-  final String subtitle;
   final List<int> lampIds;
 
-  const LampGroup({
-    required this.id,
-    required this.name,
-    required this.subtitle,
-    required this.lampIds,
-  });
+  const LampGroup({required this.id, required this.lampIds});
 }
 
 /// ══════════════════════════════════════════════════════════
@@ -83,42 +76,42 @@ const String kCarImageDir = 'assets/images/';
 const List<Lamp> kLamps = [
   // ── 1 前包围:保险杠两侧那对大圆灯 ──
   Lamp(
-    id: 0, name: '前包围左', x: 0.591, y: 0.584, size: 0.046,
+    id: 0, x: 0.591, y: 0.584, size: 0.046,
     hx0: 0.553, hy0: 0.491, hx1: 0.632, hy1: 0.659,
   ),
   Lamp(
-    id: 1, name: '前包围右', x: 0.898, y: 0.583, size: 0.045,
+    id: 1, x: 0.898, y: 0.583, size: 0.045,
     hx0: 0.855, hy0: 0.491, hx1: 0.937, hy1: 0.659,
   ),
   // ── 2 立柱下:A 柱上【下面】那对圆灯 ──
   //    热区往下吃掉到引擎盖之间的空白
   Lamp(
-    id: 2, name: '立柱下左', x: 0.443, y: 0.368, size: 0.043,
+    id: 2, x: 0.443, y: 0.368, size: 0.043,
     hx0: 0.414, hy0: 0.340, hx1: 0.472, hy1: 0.430,
   ),
   Lamp(
-    id: 3, name: '立柱下右', x: 0.778, y: 0.368, size: 0.033,
+    id: 3, x: 0.778, y: 0.368, size: 0.033,
     hx0: 0.752, hy0: 0.340, hx1: 0.818, hy1: 0.430,
   ),
   // ── 3 立柱上:A 柱上【上面】那对圆灯 ──
   //    热区往上吃掉到车顶之间的空白,下边界正好和「立柱下」相接
   Lamp(
-    id: 4, name: '立柱上左', x: 0.443, y: 0.309, size: 0.043,
+    id: 4, x: 0.443, y: 0.309, size: 0.043,
     hx0: 0.414, hy0: 0.238, hx1: 0.472, hy1: 0.336,
   ),
   Lamp(
-    id: 5, name: '立柱上右', x: 0.778, y: 0.309, size: 0.033,
+    id: 5, x: 0.778, y: 0.309, size: 0.033,
     hx0: 0.752, hy0: 0.238, hx1: 0.818, hy1: 0.336,
   ),
   // ── 4 车顶:行李架【前梁】上那对短灯条 ──
   //    注意不是顶上那根横跨整个车顶的长灯条，那根没有单独分组
   Lamp(
-    id: 6, name: '车顶左', x: 0.463, y: 0.174, size: 0.036,
+    id: 6, x: 0.463, y: 0.174, size: 0.036,
     shape: LampShape.bar,
     hx0: 0.423, hy0: 0.132, hx1: 0.507, hy1: 0.215,
   ),
   Lamp(
-    id: 7, name: '车顶右', x: 0.693, y: 0.179, size: 0.039,
+    id: 7, x: 0.693, y: 0.179, size: 0.039,
     shape: LampShape.bar,
     hx0: 0.651, hy0: 0.132, hx1: 0.742, hy1: 0.215,
   ),
@@ -127,10 +120,10 @@ const List<Lamp> kLamps = [
 /// 分组顺序特意和车图上标的编号一一对应:
 /// 组 0 显示成「1」、组 1 显示成「2」…… 界面上标几,图上就是哪一组。
 const List<LampGroup> kGroups = [
-  LampGroup(id: 0, name: '前包围', subtitle: '保险杠两侧 · 2 只', lampIds: [0, 1]),
-  LampGroup(id: 1, name: '立柱下', subtitle: 'A 柱下 · 2 只', lampIds: [2, 3]),
-  LampGroup(id: 2, name: '立柱上', subtitle: 'A 柱上 · 2 只', lampIds: [4, 5]),
-  LampGroup(id: 3, name: '车顶', subtitle: '行李架 · 2 只', lampIds: [6, 7]),
+  LampGroup(id: 0, lampIds: [0, 1]),
+  LampGroup(id: 1, lampIds: [2, 3]),
+  LampGroup(id: 2, lampIds: [4, 5]),
+  LampGroup(id: 3, lampIds: [6, 7]),
 ];
 
 Lamp lampById(int id) => kLamps.firstWhere((l) => l.id == id);
@@ -138,6 +131,36 @@ Lamp lampById(int id) => kLamps.firstWhere((l) => l.id == id);
 /// 某个灯位属于哪一组
 LampGroup groupOf(int lampId) =>
     kGroups.firstWhere((g) => g.lampIds.contains(lampId));
+
+/// 名字全部走文案表查,不写死在上面那些常量里 ——
+/// 坐标表是硬件事实,文字是界面语言,两者分开各管各的。
+String lampName(S s, int id) => switch (id) {
+      0 => s.lampBumperL,
+      1 => s.lampBumperR,
+      2 => s.lampPillarLowL,
+      3 => s.lampPillarLowR,
+      4 => s.lampPillarHighL,
+      5 => s.lampPillarHighR,
+      6 => s.lampRoofL,
+      7 => s.lampRoofR,
+      _ => '',
+    };
+
+String groupName(S s, int id) => switch (id) {
+      0 => s.groupBumper,
+      1 => s.groupPillarLow,
+      2 => s.groupPillarHigh,
+      3 => s.groupRoof,
+      _ => '',
+    };
+
+String groupSubtitle(S s, int id) => switch (id) {
+      0 => s.subBumper,
+      1 => s.subPillarLow,
+      2 => s.subPillarHigh,
+      3 => s.subRoof,
+      _ => '',
+    };
 
 /// ══════════════════════════════════════════════════════════
 /// 颜色和模式是【两个独立的维度】
@@ -176,27 +199,20 @@ class FixedDuty {
 
 class ModeInfo {
   final int id;
-  final String name;
   final IconData icon;
 
   /// 按钮选中时的强调色。这只是模式自己的辨识色,
   /// 跟灯到底发什么颜色没有关系 —— 那由上面的白/黄开关决定。
   final Color color;
 
-  final String hint;
-
-  const ModeInfo(this.id, this.name, this.icon, this.color, this.hint);
+  const ModeInfo(this.id, this.icon, this.color);
 }
 
 const List<ModeInfo> kModes = [
-  ModeInfo(LightMode.steady, '常亮', Icons.lightbulb_circle, Color(0xFF7FB2FF),
-      '按设定亮度一直亮着'),
-  ModeInfo(LightMode.drl, '日行', Icons.wb_twilight, Color(0xFFBFD4E6),
-      '低亮度长亮,白天示宽用'),
-  ModeInfo(LightMode.auto, '自动', Icons.auto_mode, Color(0xFF4DD0A0),
-      '光敏定亮度,下雨临时转黄光'),
-  ModeInfo(LightMode.flash, '爆闪', Icons.flash_on, Color(0xFFFF4D4D),
-      '三连闪 + 间隔,警示用'),
+  ModeInfo(LightMode.steady, Icons.lightbulb_circle, Color(0xFF7FB2FF)),
+  ModeInfo(LightMode.drl, Icons.wb_twilight, Color(0xFFBFD4E6)),
+  ModeInfo(LightMode.auto, Icons.auto_mode, Color(0xFF4DD0A0)),
+  ModeInfo(LightMode.flash, Icons.flash_on, Color(0xFFFF4D4D)),
 ];
 
 ModeInfo? modeInfo(int id) {
@@ -206,11 +222,19 @@ ModeInfo? modeInfo(int id) {
   return null;
 }
 
-String modeName(int id) => switch (id) {
-      LightMode.off => '关灯',
-      LightMode.steady => '常亮',
-      LightMode.drl => '日行',
-      LightMode.auto => '自动',
-      LightMode.flash => '爆闪',
-      _ => '未知',
+String modeName(S s, int id) => switch (id) {
+      LightMode.off => s.modeOff,
+      LightMode.steady => s.modeSteady,
+      LightMode.drl => s.modeDrl,
+      LightMode.auto => s.modeAuto,
+      LightMode.flash => s.modeFlash,
+      _ => s.modeUnknown,
+    };
+
+String modeHint(S s, int id) => switch (id) {
+      LightMode.steady => s.hintSteady,
+      LightMode.drl => s.hintDrl,
+      LightMode.auto => s.hintAuto,
+      LightMode.flash => s.hintFlash,
+      _ => '',
     };

@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle, AssetManifest;
 
+import '../i18n/strings.dart';
 import '../models/lamp.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
@@ -164,7 +165,7 @@ class _CarViewState extends State<CarView> with SingleTickerProviderStateMixin {
       );
     }
 
-    if (_asset == null) return const _MissingImageHint();
+    if (_asset == null) return _MissingImageHint(s: widget.state.s);
 
     final st = widget.state;
     final glow = st.isYellow ? AppColors.lightYellow : AppColors.lightWhite;
@@ -453,7 +454,8 @@ class _BeamPainter extends CustomPainter {
 
 /// 图片还没放进去时的提示。不画假车,直接告诉你该干什么。
 class _MissingImageHint extends StatelessWidget {
-  const _MissingImageHint();
+  final S s;
+  const _MissingImageHint({required this.s});
 
   @override
   Widget build(BuildContext context) {
@@ -466,25 +468,26 @@ class _MissingImageHint extends StatelessWidget {
           border: Border.all(color: AppColors.border),
         ),
         padding: const EdgeInsets.all(20),
-        child: const Center(
+        child: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.image_outlined, size: 40, color: AppColors.textLo),
-              SizedBox(height: 12),
+              const Icon(Icons.image_outlined,
+                  size: 40, color: AppColors.textLo),
+              const SizedBox(height: 12),
               Text(
-                '还没有车辆图片',
-                style: TextStyle(
+                s.noCarImage,
+                style: const TextStyle(
                   color: AppColors.textHi,
                   fontSize: 15,
                   fontWeight: FontWeight.w600,
                 ),
               ),
-              SizedBox(height: 8),
+              const SizedBox(height: 8),
               Text(
-                '把越野车图片放到\nassets/images/car.png\n然后重新运行',
+                s.noCarImageHint,
                 textAlign: TextAlign.center,
-                style: TextStyle(
+                style: const TextStyle(
                   color: AppColors.textLo,
                   fontSize: 12.5,
                   height: 1.6,
