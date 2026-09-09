@@ -16,10 +16,12 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final s = state.s;
     return ListenableBuilder(
       listenable: state,
       builder: (context, _) {
+        // s 必须在 builder 【里面】取:切换语言只会重建这个 builder,
+        // HomeScreen.build 本身不会再跑,放外面就会一直用旧语言的文案。
+        final s = state.s;
         return Scaffold(
           appBar: AppBar(
             title: Text(s.appTitle),

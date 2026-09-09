@@ -38,6 +38,12 @@ flutter:
 # 云端 CI 只跑 pub get + build，不会替你生成图标。
 flutter_launcher_icons:
   image_path: "assets/icon/icon.png"
+  # iOS 单独用一张裁掉四周 10% 的图。
+  # iOS 的图标是【方形铺满】、系统只加圆角不裁内容，直接用原图的话，
+  # 原图自带的圆角边框会在系统圆角里再套一层，看起来就是一圈黑边。
+  # 裁掉外圈留白后射灯正好撑满，同时保住那圈光环。
+  # Android 那边是自适应图标(圆形遮罩会吃掉四角)，用原图反而正好，不用换。
+  image_path_ios: "assets/icon/icon_ios.png"
   android: "ic_launcher"
   ios: true
   remove_alpha_ios: true            # App Store 不收带透明通道的图标，必须去掉 alpha

@@ -14,10 +14,11 @@ class LampsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final s = state.s;
     return ListenableBuilder(
       listenable: state,
       builder: (context, _) {
+        // 同主页:必须在 builder 里面取,否则切了语言这一页的标题不会变
+        final s = state.s;
         return Scaffold(
           appBar: AppBar(
             title: Text(s.singleLamp),
