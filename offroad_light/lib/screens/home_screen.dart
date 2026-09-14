@@ -69,7 +69,8 @@ class HomeScreen extends StatelessWidget {
                   // 车图:点哪个灯位,就开关它所在的那一组
                   CarView(
                     state: state,
-                    onTapLamp: (lamp) => state.toggleGroup(groupOf(lamp.id)),
+                    labelMode: LampLabel.group,
+                    onTapGroup: (g) => state.toggleGroup(groupById(g)),
                   ),
 
                   const SizedBox(height: 12),
@@ -86,7 +87,7 @@ class HomeScreen extends StatelessWidget {
                       ),
                     ),
                     icon: const Icon(Icons.tune, size: 18),
-                    label: Text(s.singleLamp),
+                    label: Text(s.channelDetail),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: AppColors.textHi,
                       side: const BorderSide(color: AppColors.border),
@@ -206,9 +207,8 @@ class _StatusBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = state.s;
-    final lightColor =
-        state.isYellow ? AppColors.lightYellow : AppColors.lightWhite;
-    final off = state.mode == LightMode.off;
+    final lightColor = lightColorOf(state.mode);
+    final off = state.isOff;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -245,26 +245,15 @@ class _StatusBar extends StatelessWidget {
               fontWeight: FontWeight.w600,
             ),
           ),
-          const SizedBox(width: 8),
-          Text(
-            off ? '' : (state.isYellow ? s.yellow : s.white),
-            style: const TextStyle(color: AppColors.textLo, fontSize: 12.5),
-          ),
           const Spacer(),
+          // 爆闪时固件无视通道掩码,四组一起闪 —— 这时显示「x/4 组」会对不上,
+          // 所以直接说明白在全闪,免得用户对着关掉的那组发懵。
           Text(
-            s.lampCount(state.onCount, kLamps.length),
+            state.mode == LightMode.flash
+                ? s.allGroupsFlash
+                : s.groupCount(state.onGroupCount, kGroupCount),
             style: const TextStyle(color: AppColors.textLo, fontSize: 12.5),
           ),
-          // 传感器状态:自动模式下这两个决定了灯的亮度和颜色
-          if (state.night) ...[
-            const SizedBox(width: 8),
-            const Icon(Icons.nightlight_round,
-                size: 15, color: AppColors.textLo),
-          ],
-          if (state.rain) ...[
-            const SizedBox(width: 6),
-            const Icon(Icons.water_drop, size: 15, color: Color(0xFF60A5FA)),
-          ],
         ],
       ),
     );
@@ -299,9 +288,10 @@ class _GroupCard extends StatelessWidget {
     final s = state.s;
     final on = state.isGroupOn(group);
     final partial = state.isGroupPartial(group);
-    final lightColor =
-        state.isYellow ? AppColors.lightYellow : AppColors.lightWhite;
-    final active = (on || partial) && state.mode != LightMode.off;
+    final lightColor = lightColorOf(state.mode);
+    // 高亮与否跟着车图走:看的是【当前模式那一路】亮没亮,
+    // 而不是"这组有没有开关是开的"。否则会出现图上灯灭着、卡片却高亮。
+    final active = state.isGroupLit(group.id);
 
     return GestureDetector(
       onTap: () => state.toggleGroup(group),
@@ -364,15 +354,14 @@ class _BrightnessBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = state.s;
-    // 只有常亮模式的亮度是用户说了算。
-    // 日行是固定低亮度、自动看光敏、爆闪走节奏表,这三个手动调没有意义。
-    final adjustable = state.mode == LightMode.steady;
+    // 只有白光模式的亮度是用户说了算。
+    // 日行灯和氛围灯固件里就是给满的,爆闪走节奏表,这三个手动调没有意义。
+    final adjustable = state.brightnessAdjustable;
     // 不可调的时候显示固件真正在用的那个亮度,而不是滑条记着的值,
-    // 否则日行模式下会显示上次拖到的 100%,和车上看到的对不上。
+    // 否则日行模式下会显示上次拖到的 60%,和车上看到的对不上。
     final shown = adjustable ? state.brightness : state.effectiveDuty;
-    final lightColor =
-        state.isYellow ? AppColors.lightYellow : AppColors.lightWhite;
-    final off = state.mode == LightMode.off;
+    final lightColor = lightColorOf(state.mode);
+    final off = state.isOff;
 
     return LayoutBuilder(
       builder: (context, c) {
@@ -464,12 +453,11 @@ class _BrightnessBar extends StatelessWidget {
   }
 }
 
-/// 底部两层:上面挑【颜色】,下面挑【模式】。
+/// 底部模式条:白光 / 日行灯 / 氛围灯 / 爆闪,四选一。
 ///
-/// 分成两层是刻意的 —— 这两件事本来就互不相干:
-/// 颜色决定灯发什么色,模式决定灯怎么个亮法,日行/自动/爆闪用的都是上面选中的颜色。
-/// 以前把白光/黄光和日行/自动/爆闪并排塞进一排单选,选了黄光再点日行,
-/// 颜色就被顶掉了。
+/// 没有独立的"颜色"选择了 —— 选哪个模式就亮哪一路灯:
+/// 白光和爆闪走射灯那一路,氛围灯走外圈黄光那一路,互斥。
+/// 关灯在顶栏那个电源按钮上。
 class _BottomBar extends StatelessWidget {
   final AppState state;
   const _BottomBar({required this.state});
@@ -487,11 +475,6 @@ class _BottomBar extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(11, 10, 11, 8),
-              child: _ColorBar(state: state),
-            ),
-            const Divider(height: 1, color: AppColors.border),
-            Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
               child: Row(
                 children: [
@@ -505,130 +488,6 @@ class _BottomBar extends StatelessWidget {
                       ),
                     ),
                 ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 颜色:白光 / 黄光。切它不会打断当前模式。
-class _ColorBar extends StatelessWidget {
-  final AppState state;
-  const _ColorBar({required this.state});
-
-  @override
-  Widget build(BuildContext context) {
-    final s = state.s;
-    final off = state.mode == LightMode.off;
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Opacity(
-          opacity: off ? 0.45 : 1,
-          child: Row(
-            children: [
-              Expanded(
-                child: _ColorButton(
-                  label: s.white,
-                  icon: Icons.light_mode,
-                  color: AppColors.lightWhite,
-                  selected: !state.pickedYellow,
-                  onTap: () => state.setColor(LightColorId.white),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _ColorButton(
-                  label: s.yellow,
-                  icon: Icons.wb_incandescent,
-                  color: AppColors.lightYellow,
-                  selected: state.pickedYellow,
-                  onTap: () => state.setColor(LightColorId.yellow),
-                ),
-              ),
-            ],
-          ),
-        ),
-        // 自动模式遇上下雨,设备会临时把颜色抢成黄光。
-        // 不解释一句的话,用户会以为这个开关坏了。
-        if (state.colorOverridden)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.water_drop, size: 13, color: Color(0xFF60A5FA)),
-                const SizedBox(width: 5),
-                Text(
-                  s.rainOverride,
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    color: AppColors.textLo.withValues(alpha: 0.95),
-                  ),
-                ),
-              ],
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-class _ColorButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final Color color;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _ColorButton({
-    required this.label,
-    required this.icon,
-    required this.color,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(vertical: 11),
-        decoration: BoxDecoration(
-          color: selected ? color.withValues(alpha: 0.16) : Colors.transparent,
-          borderRadius: BorderRadius.circular(11),
-          border: Border.all(
-            color: selected ? color.withValues(alpha: 0.75) : AppColors.border,
-            width: selected ? 1.4 : 1,
-          ),
-          boxShadow: selected
-              ? [
-                  BoxShadow(
-                    color: color.withValues(alpha: 0.22),
-                    blurRadius: 14,
-                    spreadRadius: -2,
-                  )
-                ]
-              : null,
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 18, color: selected ? color : AppColors.textLo),
-            const SizedBox(width: 7),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 13.5,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
-                color: selected ? color : AppColors.textLo,
               ),
             ),
           ],

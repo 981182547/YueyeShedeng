@@ -2,43 +2,52 @@
  * 智能越野射灯控制器 —— ESP32-C3 / Arduino IDE 版（BLE 手机控制）
  *
  * 这是【新固件】，与旧的 smart_spotlight_c3 并存，互不影响。
- * 相比旧版新增：BLE 手机控制、8 个灯位独立开关、NVS 掉电记忆、状态主动上报。
  *
- * ── 灯位与通道 ─────────────────────────────────────────────
- * 8 个灯位（对应车上的物理位置），每个灯位有黄/白两路，共 16 路，占满一片 PCA9685：
+ * ── 灯组与通道 ─────────────────────────────────────────────
+ * 车上 4 组灯，左右两只并联受同一路控制（点左边点右边都是一起亮）。
+ * 每组灯有 3 个功能：射灯白光 / 日行灯 / 氛围灯（外圈那圈黄光）。
+ * 4 组 × 3 功能 = 12 路 PWM。PCA9685 有 16 路，按【每组占 4 路、用前 3 路】
+ * 排布，每组最后一路空着不接 —— 这样通道号和接线板的分组一一对应。
  *
- *   灯位 ID   位置          黄光通道      白光通道
- *   0        前包围左       CH0          CH8
- *   1        前包围右       CH1          CH9
- *   2        立柱下左       CH2          CH10
- *   3        立柱下右       CH3          CH11
- *   4        立柱上左       CH4          CH12
- *   5        立柱上右       CH5          CH13
- *   6        车顶左         CH6          CH14
- *   7        车顶右         CH7          CH15
+ *   组  位置      射灯白   日行灯   氛围灯   空
+ *   0   前包围     CH0     CH1     CH2     CH3
+ *   1   立柱下     CH4     CH5     CH6     CH7
+ *   2   立柱上     CH8     CH9     CH10    CH11
+ *   3   车顶       CH12    CH13    CH14    CH15
  *
- * 分组（手机上点一下开关一整组），编号和车图上标的一致：
- *   组 0 →「1」前包围(灯位 0,1)   组 1 →「2」立柱下(2,3)
- *   组 2 →「3」立柱上(4,5)        组 3 →「4」车顶(6,7)
+ *   通道号 = 组号 * 4 + 功能号   （功能号 0=射灯白 1=日行灯 2=氛围灯）
  *
- *   前包围 = 保险杠两侧那对大圆灯
- *   立柱下 = A 柱上【下面】那对圆灯
- *   立柱上 = A 柱上【上面】那对圆灯
- *   车顶   = 行李架上那对横条灯
+ *   前包围 = 保险杠两侧那对大圆灯    立柱下 = A 柱上【下面】那对圆灯
+ *   立柱上 = A 柱上【上面】那对圆灯  车顶   = 行李架上那对横条灯
  *
- * ── 三个互相独立的维度 ────────────────────────────────────
- *   颜色 userColor：白光 / 黄光            —— 灯发什么色
- *   模式 sysMode  ：常亮/日行/自动/爆闪    —— 灯怎么个亮法
- *   灯位 lampMask ：8 位掩码               —— 哪几个灯位参与
+ * ── 模式决定发什么光 ──────────────────────────────────────
+ * 没有独立的"颜色"设置了 —— 选了哪个模式就亮哪一路灯，互斥：
  *
- * 三者正交：切模式不会把颜色弄丢，换颜色不打断当前模式，
- * 开关灯位也不影响前两者。日行、爆闪、常亮全都用 userColor 这个色。
- * 唯一例外：自动模式下遇到下雨会临时改成黄光，雨停自动还原。
+ *   模式        射灯白      日行灯    氛围灯    亮度来源
+ *   关闭(0)      -          -        -        全灭
+ *   白光(1)      ✓          -        -        manualDuty（手机滑条）
+ *   日行灯(2)    -          ✓        -        DUTY_DRL
+ *   氛围灯(3)    -          -        ✓        DUTY_AMBIENT
+ *   爆闪(4)      ✓按节奏     -        -        节奏表
+ *
+ * 【黄光不爆闪】是结构上保证的：爆闪只驱动射灯白光那一路，
+ * 氛围灯通道在爆闪模式下恒为 0，想闪也闪不了。
+ *
+ * ── 通道掩码 chMask ───────────────────────────────────────
+ * 16 位，第 N 位就是 CH N 的总开关（每组第 4 位恒 0，那一路没接线）。
+ * 掩码和模式正交：模式决定"亮哪一路功能"，掩码决定"哪几路允许亮"。
+ * 手机上：主页 4 个组开关 = 一次切该组的 3 个位；
+ *         详情页 12 个开关 = 逐个切。
+ * 唯一例外：爆闪无视掩码，4 组一起闪（警示灯要的就是全车都看得见）。
+ *
+ * ── 上电默认 ──────────────────────────────────────────────
+ * 车子点火后【默认关闭】，模式不做掉电记忆。
+ * 亮度和通道掩码照旧存 NVS —— 一开灯就是上次的亮度、上次选的那几组。
  *
  * ── 硬件连接 ───────────────────────────────────────────────
  *   IO4  -> PCA9685 SDA        IO5  -> PCA9685 SCL
- *   IO7  -> 雨滴 DO (低=下雨)   IO8  -> 光敏 DO (低=白天, 高=黑夜)
  *   IO2  <- CI1302 TX          IO3  -> CI1302 RX      (语音，可选)
+ *   IO7 / IO8 原来接雨滴和光敏，现在不用了，空着即可
  *
  * ── Arduino IDE 设置 ───────────────────────────────────────
  *   开发板   : ESP32C3 Dev Module
@@ -56,7 +65,6 @@
 
 /* CCCD(0x2902)描述符：Core 2.x 要自己加，Core 3.x 会随 NOTIFY 属性自动加。
  * 在 3.x 上再手动加一个会变成两个 CCCD —— 手机订阅时写的是这一个、
- * 固件检查的是那一个，于是 notify() 照发，手机一帧都收不到。
  * 「语音改了灯、手机不同步」十有八九就是栽在这里。 */
 #if !defined(ESP_ARDUINO_VERSION_MAJOR) || ESP_ARDUINO_VERSION_MAJOR < 3
   #define NEED_MANUAL_CCCD 1
@@ -70,8 +78,6 @@
  * ========================================================== */
 #define PIN_I2C_SDA      4
 #define PIN_I2C_SCL      5
-#define PIN_RAIN         7
-#define PIN_LIGHT        8
 #define PIN_ASR_RX       2      /* ESP32 收 <- CI1302 TX */
 #define PIN_ASR_TX       3      /* ESP32 发 -> CI1302 RX */
 #define ASR_BAUD         115200
@@ -80,22 +86,35 @@
 #define PCA9685_FREQ_HZ  1000
 #define I2C_SPEED_HZ     400000
 
-#define LAMP_COUNT       8       /* 8 个灯位 */
-#define CH_YELLOW_BASE   0       /* 黄光: CH0 + lampId */
-#define CH_WHITE_BASE    8       /* 白光: CH8 + lampId */
+/* ── 灯组与通道映射 ──────────────────────────────────────
+ * 改接线只要改这几个常量，输出级不用动。 */
+#define GROUP_COUNT      4       /* 4 组灯 */
+#define CH_PER_GROUP     4       /* 接线板 4 路一组，用前 3 路 */
+#define FN_COUNT         3       /* 每组 3 个功能 */
+#define FN_SPOT          0       /* 射灯白光 */
+#define FN_DRL           1       /* 日行灯 */
+#define FN_AMB           2       /* 氛围灯（外圈黄光） */
+#define CH_TOTAL         (GROUP_COUNT * CH_PER_GROUP)   /* 16 */
+
+/* 组号 + 功能号 -> PCA9685 通道号 */
+#define CH_OF(g, fn)     ((uint8_t)((g) * CH_PER_GROUP + (fn)))
+
+/* 掩码默认值：每组低 3 位置 1、第 4 位(空通道)置 0
+ * 0b0111 0111 0111 0111 = 0x7777 */
+#define CH_MASK_ALL      0x7777
 
 #define TICK_MS          10      /* 主循环周期 */
 #define SMOOTH_FACTOR    0.06f   /* 亮度渐变系数，越小越柔和 */
-#define DEBOUNCE_TICKS   8       /* 传感器消抖：连续 8 次(80ms) */
 
-#define DUTY_DAY         20      /* 自动模式-白天亮度 */
-#define DUTY_NIGHT       100     /* 自动模式-夜间亮度 */
-#define DUTY_DRL         10      /* 日行灯亮度 */
+/* 日行灯和氛围灯不调亮度，直接给满 ——
+ * 那些灯珠本身就比射灯暗得多，再降就基本看不见了。 */
+#define DUTY_DRL         100     /* 日行灯亮度 */
+#define DUTY_AMBIENT     100     /* 氛围灯亮度 */
 
-#define FW_VERSION       1       /* 固件协议版本，随状态一起上报 */
+#define FW_VERSION       2       /* 固件协议版本，随状态一起上报 */
 
 HardwareSerial ASR(1);           /* 用 UART1，避开 USB CDC 日志 */
-Preferences    prefs;            /* NVS：掉电记忆模式和灯位状态 */
+Preferences    prefs;            /* NVS：掉电记忆亮度和通道掩码 */
 
 /* ==========================================================
  * 二、BLE 协议定义（必须与手机 App 的 protocol.dart 完全一致）
@@ -112,39 +131,26 @@ Preferences    prefs;            /* NVS：掉电记忆模式和灯位状态 */
 /* App -> 设备 */
 #define OP_TEXT          0x01    /* ASCII 调试命令 */
 #define OP_MODE          0x10    /* [mode]            切换模式 */
-#define OP_LAMP_MASK     0x11    /* [mask]            一次设置全部 8 个灯位 */
-#define OP_LAMP          0x12    /* [lampId, on]      单个灯位开关 */
-#define OP_GROUP         0x13    /* [groupId, on]     整组开关（两个灯位） */
-#define OP_BRIGHT        0x14    /* [duty 0~100]      手动亮度 */
+#define OP_CH_MASK       0x11    /* [hi, lo]          一次设置 16 位通道掩码 */
+#define OP_CH            0x12    /* [ch, on]          单个通道开关 */
+#define OP_GROUP         0x13    /* [groupId, on]     整组开关（该组 3 个功能一起） */
+#define OP_BRIGHT        0x14    /* [duty 0~100]      白光模式的亮度 */
 #define OP_QUERY         0x15    /* []                请求上报当前状态 */
-#define OP_COLOR         0x16    /* [color]           0=白光 1=黄光 */
 
 /* 设备 -> App（Notify） */
-/* [mode, mask, bright, activeColor, night, rain, ver, userColor] */
+/* [mode, maskHi, maskLo, bright, ver] */
 #define OP_STATUS        0x20
+#define STATUS_LEN       5
 
-/* ── 颜色和模式是两个【互相独立】的维度 ──────────────────
- *
- *   颜色(userColor)：白光 / 黄光 —— 灯发什么色
- *   模式(sysMode)  ：常亮 / 日行 / 自动 / 爆闪 —— 灯怎么个亮法
- *   灯位(lampMask) ：哪几个灯位参与
- *
- * 三者正交：切模式不会把颜色弄丢，换颜色也不会打断当前模式。
- * 之前把白光/黄光和日行/自动/爆闪塞进同一个枚举，结果是
- * 「选了黄光再点日行」颜色就没了，爆闪也只能沿用上一个模式的颜色。
- */
-
-/* 模式编号 */
+/* 模式编号。必须和 App 的 LightMode 一致。 */
 enum SysMode {
-  MODE_OFF    = 0,   /* 关灯 */
-  MODE_STEADY = 1,   /* 常亮：按 manualDuty 常亮 */
-  MODE_DRL    = 2,   /* 日行：低亮度常亮 */
-  MODE_AUTO   = 3,   /* 自动：光敏定亮度，下雨临时切黄光 */
-  MODE_FLASH  = 4,   /* 爆闪：按节奏表闪 */
+  MODE_OFF     = 0,   /* 关灯：全灭，上电默认 */
+  MODE_WHITE   = 1,   /* 白光：射灯白，按 manualDuty 常亮 */
+  MODE_DRL     = 2,   /* 日行灯：只亮日行灯那一路 */
+  MODE_AMBIENT = 3,   /* 氛围灯：只亮外圈黄光那一路 */
+  MODE_FLASH   = 4,   /* 爆闪：射灯白按节奏表闪，无视掩码 */
   MODE_MAX
 };
-
-enum LightColor { COLOR_WHITE = 0, COLOR_YELLOW = 1 };
 
 /* ==========================================================
  * 三、PCA9685 驱动（裸寄存器，无需第三方库）
@@ -169,8 +175,8 @@ static void pcaWrite(uint8_t reg, uint8_t val) {
 static void pcaWriteLed(uint8_t ch, uint16_t on, uint16_t off) {
   Wire.beginTransmission(PCA9685_ADDR);
   Wire.write(PCA_LED0_ON_L + 4 * ch);
-  Wire.write(on & 0xFF);
-  Wire.write(on >> 8);
+  Wire.write(on  & 0xFF);
+  Wire.write(on  >> 8);
   Wire.write(off & 0xFF);
   Wire.write(off >> 8);
   Wire.endTransmission();
@@ -180,24 +186,26 @@ static void pca9685Init(uint32_t freqHz) {
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, I2C_SPEED_HZ);
 
   pcaWrite(PCA_MODE1, MODE1_SLEEP);              /* 睡眠态才能改 PRESCALE */
+  delay(1);
 
   uint8_t prescale = (uint8_t)(roundf(25000000.0f / (4096.0f * freqHz)) - 1);
-  if (prescale < 3) prescale = 3;
   pcaWrite(PCA_PRESCALE, prescale);
+  delay(1);
 
   pcaWrite(PCA_MODE1, MODE1_AI | MODE1_ALLCALL);
-  delay(5);
+  delay(1);
   pcaWrite(PCA_MODE1, MODE1_RESTART | MODE1_AI | MODE1_ALLCALL);
   pcaWrite(PCA_MODE2, 0x04);                     /* OUTDRV = 推挽 */
+  delay(1);
 
-  for (int i = 0; i < 16; i++) pcaWriteLed(i, 0, 0x1000);   /* 全灭 */
+  for (uint8_t ch = 0; ch < CH_TOTAL; ch++) pcaWriteLed(ch, 0, 0x1000);
 
   Serial.printf("[init] PCA9685 就绪: %luHz prescale=%u\n",
                 (unsigned long)freqHz, prescale);
 }
 
 /* 设置单个通道占空比 0~100%。
- * on 相位按通道号错开，16 路同时点亮时电源尖峰会小很多。 */
+ * on 相位按通道号错开，多路同时点亮时电源尖峰会小很多。 */
 static void pcaSetChannel(uint8_t ch, int duty) {
   if (duty < 0)   duty = 0;
   if (duty > 100) duty = 100;
@@ -214,7 +222,7 @@ static void pcaSetChannel(uint8_t ch, int duty) {
 }
 
 /* 只在数值变化时才刷 I2C，避免每个 tick 都写满 16 路把总线占死 */
-static int lastDuty[16] = {
+static int lastDuty[CH_TOTAL] = {
   -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1
 };
 
@@ -241,22 +249,13 @@ static const FlashStep flashPattern[] = {
 };
 #define FLASH_STEPS (sizeof(flashPattern) / sizeof(flashPattern[0]))
 
-static SysMode    sysMode    = MODE_STEADY;    /* 开机模式（会被 NVS 覆盖） */
-static uint8_t    lampMask   = 0xFF;           /* 8 个灯位的开关位图，默认全开 */
-static uint8_t    manualDuty = 100;            /* 常亮模式下的亮度 */
+/* 上电默认关灯 —— 车子点火不能自己亮起来。模式不做掉电记忆。 */
+static SysMode  sysMode    = MODE_OFF;
+static uint16_t chMask     = CH_MASK_ALL;      /* 通道掩码，bit N = CH N */
+static uint8_t  manualDuty = 100;              /* 白光模式的亮度 */
 
-/* 用户选的颜色：一直保持，切模式不会动它，存 NVS */
-static LightColor userColor = COLOR_WHITE;
-/* 这一刻真正输出的颜色：正常等于 userColor，
-   只有自动模式遇到下雨才临时改成黄光（穿透雨雾），雨停自动还原 */
-static LightColor activeColor = COLOR_WHITE;
-
-static float curYellow = 0.0f, curWhite = 0.0f; /* 渐变中的实际亮度 */
-
-/* 传感器状态：开机默认 天亮(0) / 没雨(1) */
-static int lightStable = 0, lightCnt = 0;
-static int rainStable  = 1, rainCnt  = 0;
-static int lastRain    = 1;
+/* 三个功能各自渐变中的实际亮度 */
+static float curFn[FN_COUNT] = { 0.0f, 0.0f, 0.0f };
 
 static uint32_t flashIdx = 0, flashMs = 0, logMs = 0;
 static const char *reason = "Boot";
@@ -265,37 +264,32 @@ static const char *reason = "Boot";
 static bool     statusDirty = true;
 static uint32_t statusMs    = 0;
 
+/* 一组灯在掩码里占的 3 个位（第 4 位是空通道，不置位） */
+static inline uint16_t groupBits(uint8_t g) {
+  return (uint16_t)0x0007 << (g * CH_PER_GROUP);
+}
+
 /* ==========================================================
  * 五、NVS 掉电记忆
  *
- * 用户设过的模式和灯位开关要记住，下次上电直接恢复成上次的样子。
+ * 只记亮度和通道掩码 —— 模式故意不记，点火后一律是关着的。
  * 只在值真的变了的时候写，NVS 有擦写寿命，别每个 tick 都写。
  * ========================================================== */
 static void saveSettings() {
-  prefs.putUChar("mode", (uint8_t)sysMode);
-  prefs.putUChar("mask", lampMask);
+  prefs.putUShort("chmask", chMask);
   prefs.putUChar("duty", manualDuty);
-  prefs.putUChar("color", (uint8_t)userColor);
-  Serial.printf("[NVS] 已保存 mode=%u color=%s mask=0x%02X duty=%u\n",
-                (unsigned)sysMode,
-                userColor == COLOR_WHITE ? "白" : "黄",
-                lampMask, manualDuty);
+  Serial.printf("[NVS] 已保存 mask=0x%04X duty=%u\n", chMask, manualDuty);
 }
 
 static void loadSettings() {
   prefs.begin("spotlight", false);
-  /* 出厂默认：白光、常亮、全部灯位打开、100% —— 用户没设置过就是白光 */
-  uint8_t m = prefs.getUChar("mode", MODE_STEADY);
-  sysMode    = (m < MODE_MAX) ? (SysMode)m : MODE_STEADY;
-  lampMask   = prefs.getUChar("mask", 0xFF);
+  /* 出厂默认：12 路全开、100% */
+  chMask     = prefs.getUShort("chmask", CH_MASK_ALL);
+  chMask    &= CH_MASK_ALL;                 /* 空通道那几位强制清掉 */
   manualDuty = prefs.getUChar("duty", 100);
   if (manualDuty > 100) manualDuty = 100;
-  userColor  = prefs.getUChar("color", COLOR_WHITE) ? COLOR_YELLOW : COLOR_WHITE;
-  activeColor = userColor;
-  Serial.printf("[NVS] 已恢复 mode=%u color=%s mask=0x%02X duty=%u\n",
-                (unsigned)sysMode,
-                userColor == COLOR_WHITE ? "白" : "黄",
-                lampMask, manualDuty);
+  Serial.printf("[NVS] 已恢复 mask=0x%04X duty=%u（模式不记忆，开机为关灯）\n",
+                chMask, manualDuty);
 }
 
 /* ==========================================================
@@ -312,23 +306,20 @@ static bool               bleConnected = false;
 static uint32_t notifyCount = 0;
 
 /* 把当前状态打包成一帧 0xA5 上报给手机。
- * App 收到就刷新界面 —— 语音、传感器、手机三方谁改了状态，手机上都能立刻看到。 */
+ * App 收到就刷新界面 —— 语音、手机两边谁改了状态，手机上都能立刻看到。 */
 static void notifyStatus() {
   if (!bleConnected || txChar == nullptr) return;
 
-  uint8_t pkt[4 + 8];
+  uint8_t pkt[4 + STATUS_LEN];
   pkt[0] = PKT_MAGIC;
   pkt[1] = OP_STATUS;
   pkt[2] = 0;
-  pkt[3] = 8;
+  pkt[3] = STATUS_LEN;
   pkt[4] = (uint8_t)sysMode;
-  pkt[5] = lampMask;
-  pkt[6] = manualDuty;
-  pkt[7] = (uint8_t)activeColor;      /* 这一刻真实输出的颜色（自动模式遇雨会变） */
-  pkt[8] = lightStable ? 1 : 0;       /* 1 = 夜晚 */
-  pkt[9] = rainStable ? 0 : 1;        /* 1 = 正在下雨 */
-  pkt[10] = FW_VERSION;
-  pkt[11] = (uint8_t)userColor;       /* 用户选的颜色，App 的白/黄切换按它显示 */
+  pkt[5] = (uint8_t)(chMask >> 8);
+  pkt[6] = (uint8_t)(chMask & 0xFF);
+  pkt[7] = manualDuty;
+  pkt[8] = FW_VERSION;
 
   txChar->setValue(pkt, sizeof(pkt));
   txChar->notify();
@@ -340,10 +331,10 @@ static bool     savePending = false;
 static uint32_t saveTimer   = 0;
 
 /* 标记状态已变化：下个 tick 上报，并排队一次存盘。
- * 传感器引起的变化（自动模式切黄光）只上报不存盘，那不是用户的设置。
  *
  * 存盘不能立刻做：拖亮度滑条会连发几十条指令，条条都写 NVS 是在白白
- * 消耗闪存擦写寿命。这里只排队，等状态稳定 2 秒再真正写一次。 */
+ * 消耗闪存擦写寿命。这里只排队，等状态稳定 2 秒再真正写一次。
+ * 模式变化只上报不存盘 —— 模式本来就不记忆。 */
 static void markDirty(bool persist = true) {
   statusDirty = true;
   if (persist) {
@@ -365,6 +356,15 @@ class ServerCallbacks : public BLEServerCallbacks {
   }
 };
 
+/* 换掩码的统一入口：空通道那几位永远清掉，省得界面发错了把没接线的通道点亮 */
+static void applyMask(uint16_t next, const char *who) {
+  next &= CH_MASK_ALL;
+  if (next == chMask) return;
+  chMask = next;
+  Serial.printf("[BLE] %s -> 掩码 0x%04X\n", who, chMask);
+  markDirty();
+}
+
 /* 解析 App 发来的封包。
  * BLE 一包最多几十字节，我们的指令都很短，不会被分片，直接按帧解析即可。 */
 static void handlePacket(uint8_t op, const uint8_t *data, size_t len) {
@@ -377,45 +377,30 @@ static void handlePacket(uint8_t op, const uint8_t *data, size_t len) {
         sysMode = (SysMode)m;
         if (sysMode == MODE_FLASH) { flashIdx = 0; flashMs = 0; }
         Serial.printf("[BLE] 切换模式: %u\n", (unsigned)m);
-        markDirty();
+        markDirty(false);              /* 模式不存盘 */
       }
       break;
     }
-    case OP_LAMP_MASK: {
-      if (len < 1) return;
-      if (lampMask != data[0]) {
-        lampMask = data[0];
-        Serial.printf("[BLE] 灯位掩码: 0x%02X\n", lampMask);
-        markDirty();
-      }
-      break;
-    }
-    case OP_LAMP: {
+    case OP_CH_MASK: {
       if (len < 2) return;
-      uint8_t id = data[0];
-      if (id >= LAMP_COUNT) return;
-      uint8_t next = data[1] ? (lampMask | (1 << id)) : (lampMask & ~(1 << id));
-      if (next != lampMask) {
-        lampMask = next;
-        Serial.printf("[BLE] 灯位 %u -> %s (掩码 0x%02X)\n",
-                      id, data[1] ? "开" : "关", lampMask);
-        markDirty();
-      }
+      applyMask(((uint16_t)data[0] << 8) | data[1], "通道掩码");
+      break;
+    }
+    case OP_CH: {
+      if (len < 2) return;
+      uint8_t ch = data[0];
+      if (ch >= CH_TOTAL) return;
+      uint16_t bit = (uint16_t)1 << ch;
+      applyMask(data[1] ? (chMask | bit) : (chMask & ~bit), "单通道");
       break;
     }
     case OP_GROUP: {
-      /* 一组 = 相邻两个灯位（左右各一）：组 0 = 灯位 0,1；组 1 = 2,3 … */
+      /* 整组开关 = 这组的 3 个功能一起切 */
       if (len < 2) return;
       uint8_t g = data[0];
-      if (g >= LAMP_COUNT / 2) return;
-      uint8_t bits = 0x03 << (g * 2);
-      uint8_t next = data[1] ? (lampMask | bits) : (lampMask & ~bits);
-      if (next != lampMask) {
-        lampMask = next;
-        Serial.printf("[BLE] 灯组 %u -> %s (掩码 0x%02X)\n",
-                      g, data[1] ? "开" : "关", lampMask);
-        markDirty();
-      }
+      if (g >= GROUP_COUNT) return;
+      uint16_t bits = groupBits(g);
+      applyMask(data[1] ? (chMask | bits) : (chMask & ~bits), "灯组");
       break;
     }
     case OP_BRIGHT: {
@@ -424,17 +409,6 @@ static void handlePacket(uint8_t op, const uint8_t *data, size_t len) {
       if (manualDuty != d) {
         manualDuty = d;
         Serial.printf("[BLE] 亮度: %u%%\n", manualDuty);
-        markDirty();
-      }
-      break;
-    }
-    case OP_COLOR: {
-      /* 只改颜色，不碰模式 —— 当前是日行就还是日行，是爆闪就还接着闪 */
-      if (len < 1) return;
-      LightColor c = data[0] ? COLOR_YELLOW : COLOR_WHITE;
-      if (userColor != c) {
-        userColor = c;
-        Serial.printf("[BLE] 颜色: %s\n", c == COLOR_WHITE ? "白光" : "黄光");
         markDirty();
       }
       break;
@@ -513,13 +487,6 @@ static void bleInit() {
 /* ==========================================================
  * 七、语音指令（沿用旧固件的 CI1302，可选）
  * ========================================================== */
-static int debounceRead(int pin, int &stable, int &cnt) {
-  int v = digitalRead(pin);
-  if (v == stable)                 cnt = 0;
-  else if (++cnt >= DEBOUNCE_TICKS) { stable = v; cnt = 0; }
-  return stable;
-}
-
 static bool asrReadCmd(char *out, size_t size) {
   if (!ASR.available()) return false;
   delay(5);                                      /* 等一帧收完 */
@@ -533,33 +500,39 @@ static bool asrReadCmd(char *out, size_t size) {
   return n > 0;
 }
 
-/* 语音改的也是同一套状态，所以照样存 NVS + 上报手机 */
+/* 语音改的也是同一套状态，所以照样上报手机。
+ *
+ * CI1302 的词条是烧在模块里的，改不了，所以按现有词条重新映射到新模式：
+ *   WHT / ON  -> 白光      YEL / RED -> 氛围灯（原来的"黄光"）
+ *   DRL       -> 日行灯    BL / BLBL -> 爆闪
+ *   OFF       -> 关灯
+ *   AUTO      -> 不响应。自动模式整个取消了，宁可不动也别乱切一个模式出来，
+ *                否则用户说了句"自动"灯却变成白光，比没反应更让人摸不着头脑。
+ */
 static void handleVoice(const char *cmd) {
-  /* 白光/黄光只换颜色，不动模式 —— 和 App 上那个白/黄开关是同一个东西 */
   if (strstr(cmd, "WHT")) {
-    userColor = COLOR_WHITE;   Serial.println(">> 语音: 白光");
-    if (sysMode == MODE_OFF) sysMode = MODE_STEADY;   /* 关着灯说颜色，顺手点亮 */
+    sysMode = MODE_WHITE;    Serial.println(">> 语音: 白光");
   } else if (strstr(cmd, "YEL") || strstr(cmd, "RED")) {
-    userColor = COLOR_YELLOW;  Serial.println(">> 语音: 黄光");
-    if (sysMode == MODE_OFF) sysMode = MODE_STEADY;
+    sysMode = MODE_AMBIENT;  Serial.println(">> 语音: 氛围灯");
   } else if (strstr(cmd, "BLBL") || strstr(cmd, "BL")) {
     if (sysMode != MODE_FLASH) { flashIdx = 0; flashMs = 0; }
-    sysMode = MODE_FLASH;  Serial.println(">> 语音: 爆闪");
+    sysMode = MODE_FLASH;    Serial.println(">> 语音: 爆闪");
   } else if (strstr(cmd, "AUTO")) {
-    sysMode = MODE_AUTO;   Serial.println(">> 语音: 自动");
+    Serial.println(">> 语音: 自动 —— 该模式已取消，忽略");
+    return;                                      /* 不动模式，也不上报 */
   } else if (strstr(cmd, "DRL")) {
-    sysMode = MODE_DRL;    Serial.println(">> 语音: 日行灯");
+    sysMode = MODE_DRL;      Serial.println(">> 语音: 日行灯");
   } else if (strstr(cmd, "OFF")) {
-    sysMode = MODE_OFF;    Serial.println(">> 语音: 关灯");
+    sysMode = MODE_OFF;      Serial.println(">> 语音: 关灯");
   } else if (strstr(cmd, "ON")) {
-    sysMode = MODE_STEADY; Serial.println(">> 语音: 开灯");
+    sysMode = MODE_WHITE;    Serial.println(">> 语音: 开灯");
   } else {
     Serial.print(">> [语音] 未匹配, HEX:");
     for (size_t i = 0; cmd[i]; i++) Serial.printf(" %02X", (uint8_t)cmd[i]);
     Serial.println();
     return;
   }
-  markDirty();
+  markDirty(false);                              /* 模式不存盘 */
 }
 
 /* ==========================================================
@@ -569,31 +542,15 @@ void setup() {
   Serial.begin(115200);                          /* USB CDC 日志 */
   ASR.begin(ASR_BAUD, SERIAL_8N1, PIN_ASR_RX, PIN_ASR_TX);
 
-  pinMode(PIN_RAIN,  INPUT_PULLUP);
-  pinMode(PIN_LIGHT, INPUT_PULLUP);
-
-  loadSettings();                                /* 先恢复上次的设置 */
+  loadSettings();                                /* 恢复亮度和掩码（模式不恢复） */
   pca9685Init(PCA9685_FREQ_HZ);
   bleInit();
 
-  Serial.println("[init] 系统启动完毕  FW=BLE-v1");
+  Serial.println("[init] 系统启动完毕  FW=BLE-v2  上电默认关灯");
 }
 
 void loop() {
   char cmd[128];
-
-  /* ---------- 0. 传感器轮询 ---------- */
-  int curLight = debounceRead(PIN_LIGHT, lightStable, lightCnt);  /* 0=白天 1=黑夜 */
-  int curRain  = debounceRead(PIN_RAIN,  rainStable,  rainCnt);   /* 0=下雨 1=干燥 */
-
-  /* 雨滴边沿：只有自动模式才让它抢颜色，其它模式一律听用户的 */
-  if (curRain != lastRain) {
-    if (sysMode == MODE_AUTO) {
-      Serial.println(curRain == 0 ? ">> [传感器] 下雨，临时切黄光穿透雨雾"
-                                  : ">> [传感器] 雨停，还原成所选颜色");
-    }
-    lastRain = curRain;
-  }
 
   /* ---------- 1. 语音指令 ---------- */
   if (asrReadCmd(cmd, sizeof(cmd))) {
@@ -601,35 +558,31 @@ void loop() {
     handleVoice(cmd);
   }
 
-  /* ---------- 2. 按模式算出【颜色】和【亮度】 ---------- */
-  int  targetDuty  = 0;
-  bool hardSwitch  = false;      /* 爆闪要硬切，不能走渐变 */
-
-  /* 颜色一律跟着用户选的走 —— 日行、爆闪、常亮全都用这个色。
-     唯一的例外在下面的自动模式里：下雨时临时改黄光。 */
-  activeColor = userColor;
+  /* ---------- 2. 按模式算出三个功能各自的目标亮度 ----------
+     模式是互斥的：同一时刻只有一个功能出光，其余两个恒 0。
+     「黄光不爆闪」就是靠这个表保证的 —— 爆闪那一行只填 FN_SPOT。 */
+  int  fnDuty[FN_COUNT] = { 0, 0, 0 };
+  bool hardSwitch = false;      /* 爆闪要硬切，不能走渐变 */
+  bool ignoreMask = false;      /* 爆闪无视掩码，4 组一起闪 */
 
   switch (sysMode) {
     case MODE_OFF:
-      targetDuty = 0;
       reason = "Off";
       break;
 
-    case MODE_STEADY:
-      targetDuty = manualDuty;
-      reason = "Steady";
+    case MODE_WHITE:
+      fnDuty[FN_SPOT] = manualDuty;
+      reason = "White";
       break;
 
     case MODE_DRL:
-      targetDuty = DUTY_DRL;
+      fnDuty[FN_DRL] = DUTY_DRL;
       reason = "DRL";
       break;
 
-    case MODE_AUTO:
-      /* 光敏定亮度。下雨临时切黄光穿透雨雾，雨停自动还原成用户选的颜色 */
-      targetDuty = (curLight == 0) ? DUTY_DAY : DUTY_NIGHT;
-      if (curRain == 0) activeColor = COLOR_YELLOW;
-      reason = (curLight == 0) ? "Auto/Day" : "Auto/Night";
+    case MODE_AMBIENT:
+      fnDuty[FN_AMB] = DUTY_AMBIENT;
+      reason = "Ambient";
       break;
 
     case MODE_FLASH: {
@@ -638,45 +591,37 @@ void loop() {
         flashMs  = 0;
         flashIdx = (flashIdx + 1) % FLASH_STEPS;
       }
-      targetDuty = flashPattern[flashIdx].duty;
+      fnDuty[FN_SPOT] = flashPattern[flashIdx].duty;
       hardSwitch = true;
+      ignoreMask = true;        /* 警示灯要全车都看得见 */
       reason = "Flash";
       break;
     }
 
     default:
-      targetDuty = 0;
       break;
   }
 
-  /* 实际输出的颜色一变就上报，App 那边的显示才跟得上（比如雨天自动转黄） */
-  static LightColor lastActive = COLOR_WHITE;
-  if (activeColor != lastActive) {
-    lastActive  = activeColor;
-    statusDirty = true;
+  /* ---------- 3. 渐变 ---------- */
+  for (uint8_t fn = 0; fn < FN_COUNT; fn++) {
+    float target = (float)fnDuty[fn];
+    if (hardSwitch) {
+      curFn[fn] = target;
+    } else {
+      curFn[fn] += (target - curFn[fn]) * SMOOTH_FACTOR;
+      if (fabsf(target - curFn[fn]) < 0.5f) curFn[fn] = target;
+    }
   }
 
-  /* ---------- 3. 颜色路由 + 渐变 ---------- */
-  float targetYellow = (activeColor == COLOR_YELLOW) ? targetDuty : 0.0f;
-  float targetWhite  = (activeColor == COLOR_WHITE)  ? targetDuty : 0.0f;
-
-  if (hardSwitch) {
-    curYellow = targetYellow;
-    curWhite  = targetWhite;
-  } else {
-    curYellow += (targetYellow - curYellow) * SMOOTH_FACTOR;
-    curWhite  += (targetWhite  - curWhite ) * SMOOTH_FACTOR;
-    if (fabsf(targetYellow - curYellow) < 0.5f) curYellow = targetYellow;
-    if (fabsf(targetWhite  - curWhite ) < 0.5f) curWhite  = targetWhite;
-  }
-
-  /* ---------- 4. 按灯位掩码输出 ---------- */
-  int dutyY = (int)(curYellow + 0.5f);
-  int dutyW = (int)(curWhite  + 0.5f);
-  for (uint8_t i = 0; i < LAMP_COUNT; i++) {
-    bool on = lampMask & (1 << i);               /* 这个灯位被用户关掉了就不亮 */
-    pcaSetChannelCached(CH_YELLOW_BASE + i, on ? dutyY : 0);
-    pcaSetChannelCached(CH_WHITE_BASE  + i, on ? dutyW : 0);
+  /* ---------- 4. 按通道掩码输出 ---------- */
+  for (uint8_t g = 0; g < GROUP_COUNT; g++) {
+    for (uint8_t fn = 0; fn < FN_COUNT; fn++) {
+      uint8_t ch  = CH_OF(g, fn);
+      bool    on  = ignoreMask || (chMask & ((uint16_t)1 << ch));
+      pcaSetChannelCached(ch, on ? (int)(curFn[fn] + 0.5f) : 0);
+    }
+    /* 每组第 4 路没接线，主动压 0，不让它悬空 */
+    pcaSetChannelCached(CH_OF(g, FN_COUNT), 0);
   }
 
   /* ---------- 5. NVS 延迟落盘 ---------- */
@@ -690,7 +635,7 @@ void loop() {
   }
 
   /* ---------- 6. 状态上报 ---------- */
-  /* 有变化就报。爆闪时状态每 50ms 就变一次，不能跟着报，
+  /* 有变化就报。爆闪时亮度每 50ms 就变一次，不能跟着报，
      所以只报"设置"层面的变化，不报闪烁的瞬时亮度。 */
   if (statusDirty) {
     notifyStatus();
@@ -707,16 +652,14 @@ void loop() {
   logMs += TICK_MS;
   if (logMs >= 1000) {
     logMs = 0;
-    Serial.printf("Mode:%s Color:%s(选%s) Mask:0x%02X Light:%s Rain:%s BLE:%s Notify:%lu | Y:%d%% W:%d%%\n",
+    Serial.printf("Mode:%s Mask:0x%04X BLE:%s Notify:%lu | Spot:%d%% DRL:%d%% Amb:%d%%\n",
                   reason,
-                  (activeColor == COLOR_WHITE) ? "White" : "Yellow",
-                  (userColor == COLOR_WHITE) ? "W" : "Y",
-                  lampMask,
-                  curLight ? "Night" : "Day",
-                  curRain  ? "Dry"   : "Rain",
+                  chMask,
                   bleConnected ? "ON" : "--",
                   (unsigned long)notifyCount,
-                  dutyY, dutyW);
+                  (int)(curFn[FN_SPOT] + 0.5f),
+                  (int)(curFn[FN_DRL]  + 0.5f),
+                  (int)(curFn[FN_AMB]  + 0.5f));
   }
 
   delay(TICK_MS);

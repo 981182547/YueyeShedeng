@@ -9,30 +9,56 @@ import '../models/lamp.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
 
-/// 调坐标时打开它,会把每个灯位的点击热区用青色框画出来,
+/// 调坐标时打开它,会把每个灯的点击热区用青色框画出来,
 /// 一眼就能看出热区有没有盖住灯、相邻的有没有重叠。发版前记得关掉。
 const bool kShowHitAreas = false;
+
+/// 灯这会儿该画成什么样。
+///
+/// 三种画法对应车上三串不同的灯珠,看起来必须是三个样子,
+/// 不然手机上分不出现在开的到底是哪一路。
+enum LampStyle {
+  /// 不亮
+  dark,
+
+  /// 射灯白光 / 爆闪:实心白、强光晕、向前射出光束
+  spot,
+
+  /// 日行灯:也是白的,但整体暗一截,不射光束
+  drl,
+
+  /// 氛围灯:灯的区域【里面画一圈黄环】,中间不填,弱亮,不射光束
+  ring,
+}
+
+LampStyle styleOf(int mode) => switch (mode) {
+      LightMode.white => LampStyle.spot,
+      LightMode.flash => LampStyle.spot,
+      LightMode.drl => LampStyle.drl,
+      LightMode.ambient => LampStyle.ring,
+      _ => LampStyle.dark,
+    };
 
 /// 光点上标什么数字
 enum LampLabel {
   none,
 
-  /// 标所属【组】的编号 1~4,和车图上标注的编号一致 —— 主页用
+  /// 标所属【组】的编号 1~4,和车图上标注的编号一致
   group,
-
-  /// 标【灯位】编号 1~8 —— 单灯页用
-  lamp,
 }
 
-/// 车辆实拍图 + 灯位热区。
+/// 车辆实拍图 + 灯组热区。
 ///
-/// 图片按原始比例铺满,灯位用【相对坐标】叠在上面,所以任何屏幕尺寸下
+/// 图片按原始比例铺满,灯用【相对坐标】叠在上面,所以任何屏幕尺寸下
 /// 光点都长在车上正确的位置。坐标表在 models/lamp.dart。
+///
+/// 注意车图上画着 8 个灯,但只有 4 组 —— 同一排的左右两只并联在一路上,
+/// 点哪边都是整排一起亮,这跟车上实际的接线是一致的。
 class CarView extends StatefulWidget {
   final AppState state;
 
-  /// 点了某个灯位。主页面传的是"切整组",单灯页传的是"切这一个"。
-  final void Function(Lamp lamp) onTapLamp;
+  /// 点了某一组灯
+  final void Function(int groupId) onTapGroup;
 
   /// 高亮显示某一组(在组卡片上按住时用)
   final int? highlightGroup;
@@ -43,7 +69,7 @@ class CarView extends StatefulWidget {
   const CarView({
     super.key,
     required this.state,
-    required this.onTapLamp,
+    required this.onTapGroup,
     this.highlightGroup,
     this.labelMode = LampLabel.none,
   });
@@ -168,7 +194,11 @@ class _CarViewState extends State<CarView> with SingleTickerProviderStateMixin {
     if (_asset == null) return _MissingImageHint(s: widget.state.s);
 
     final st = widget.state;
-    final glow = st.isYellow ? AppColors.lightYellow : AppColors.lightWhite;
+    final style = styleOf(st.mode);
+    // 氛围灯是黄的,射灯和日行灯都是白的
+    final glow = style == LampStyle.ring
+        ? AppColors.lightYellow
+        : AppColors.lightWhite;
 
     // 爆闪模式下才跑动画,其它模式停掉,不白耗电
     final flashing = st.mode == LightMode.flash;
@@ -178,9 +208,13 @@ class _CarViewState extends State<CarView> with SingleTickerProviderStateMixin {
       _flash.stop();
     }
 
+    // 只有射灯那一路才往前射光束 —— 日行灯和氛围灯是示廓用的,
+    // 本来就不该有一道打出去的光柱。
+    final castsBeam = style == LampStyle.spot;
+
     return AspectRatio(
       aspectRatio: _aspect,
-      // 立柱上下那两个灯挨得太近,在手机上只隔十几 dp。
+      // 立柱上下那两组灯挨得太近,在手机上只隔十几 dp。
       // 套一层缩放:两指放大之后就能精确点到想要的那一组。
       // scale=1 时 InteractiveViewer 不吃拖动手势,页面照样能正常上下滚。
       child: InteractiveViewer(
@@ -190,13 +224,15 @@ class _CarViewState extends State<CarView> with SingleTickerProviderStateMixin {
           final w = c.maxWidth;
           final h = c.maxHeight;
 
-          // 点亮的灯位坐标,交给光束层去画
+          // 点亮的灯坐标,交给光束层去画
           final beams = <Offset>[];
           final beamSizes = <double>[];
-          for (final l in kLamps) {
-            if (st.isLampLit(l.id)) {
-              beams.add(Offset(l.x * w, l.y * h));
-              beamSizes.add(l.size * w);
+          if (castsBeam) {
+            for (final l in kLamps) {
+              if (st.isGroupLit(l.group)) {
+                beams.add(Offset(l.x * w, l.y * h));
+                beamSizes.add(l.size * w);
+              }
             }
           }
 
@@ -205,7 +241,7 @@ class _CarViewState extends State<CarView> with SingleTickerProviderStateMixin {
             builder: (context, _) {
               // 非爆闪时恒为 1(常亮);爆闪时按节奏表在 1 和 0 之间跳
               final level = flashing ? _flashLevel(_flash.value) : 1.0;
-              // 当前亮度(0~1):拖亮度滑条时车图上的灯会跟着明暗变化
+              // 当前亮度(0~1):已经把日行灯/氛围灯的显示折扣算进去了
               final intensity = st.lightIntensity;
 
               return Stack(
@@ -233,21 +269,21 @@ class _CarViewState extends State<CarView> with SingleTickerProviderStateMixin {
                       lamp: l,
                       boxW: w,
                       boxH: h,
-                      // 爆闪灭的那一拍,灯位也跟着暗下去
-                      lit: st.isLampLit(l.id) && level > 0,
-                      on: st.isLampOn(l.id),
+                      // 爆闪灭的那一拍,灯也跟着暗下去
+                      style: (st.isGroupLit(l.group) && level > 0)
+                          ? style
+                          : LampStyle.dark,
+                      // 这一组还有没有通道是开着的(决定灭着时的描边深浅)
+                      on: LampFn.all
+                          .any((fn) => st.isChOn(chOf(l.group, fn))),
                       glow: glow,
                       intensity: intensity,
                       instant: flashing, // 爆闪要硬切,不能走渐变动画
-                      highlighted: widget.highlightGroup != null &&
-                          kGroups[widget.highlightGroup!]
-                              .lampIds
-                              .contains(l.id),
+                      highlighted: widget.highlightGroup == l.group,
                       label: switch (widget.labelMode) {
                         LampLabel.none => null,
                         // 组号从 1 开始，正好是车图上标的那个编号
-                        LampLabel.group => '${groupOf(l.id).id + 1}',
-                        LampLabel.lamp => '${l.id + 1}',
+                        LampLabel.group => '${l.group + 1}',
                       },
                     ),
 
@@ -262,7 +298,7 @@ class _CarViewState extends State<CarView> with SingleTickerProviderStateMixin {
                       height: l.hitH * h,
                       child: GestureDetector(
                         behavior: HitTestBehavior.opaque,
-                        onTap: () => widget.onTapLamp(l),
+                        onTap: () => widget.onTapGroup(l.group),
                         child: kShowHitAreas
                             ? Container(
                                 decoration: BoxDecoration(
@@ -286,13 +322,13 @@ class _CarViewState extends State<CarView> with SingleTickerProviderStateMixin {
   }
 }
 
-/// 单个灯位的发光点。纯视觉,点击由上面那层热区负责。
+/// 单个灯的发光点。纯视觉,点击由上面那层热区负责。
 class _LampDot extends StatelessWidget {
   final Lamp lamp;
   final double boxW;
   final double boxH;
-  final bool lit; // 正在发光(灯位开着 + 模式不是关灯)
-  final bool on; // 灯位开关本身
+  final LampStyle style; // 这会儿画成什么样
+  final bool on; // 这一组还有通道开着(灭着时描边亮一点)
   final Color glow;
   final double intensity; // 当前亮度 0~1，决定光点多亮、光晕多大
   final bool instant; // true = 不走渐变(爆闪)
@@ -303,7 +339,7 @@ class _LampDot extends StatelessWidget {
     required this.lamp,
     required this.boxW,
     required this.boxH,
-    required this.lit,
+    required this.style,
     required this.on,
     required this.glow,
     required this.intensity,
@@ -332,65 +368,114 @@ class _LampDot extends StatelessWidget {
             duration: Duration(milliseconds: instant ? 0 : 220),
             width: w,
             height: h,
-            decoration: BoxDecoration(
-              shape: isBar ? BoxShape.rectangle : BoxShape.circle,
-              borderRadius: isBar ? BorderRadius.circular(h / 2) : null,
-              // 灯芯:亮度低时压暗,但不压到看不见 —— 10% 的日行灯
-              // 在车上也还是看得出在亮的
-              color: lit
-                  ? glow.withValues(alpha: 0.30 + 0.65 * intensity)
-                  : Colors.black.withValues(alpha: 0.35),
-              border: Border.all(
-                color: lit
-                    ? glow
-                    : (highlighted
-                        ? AppColors.accent
-                        : Colors.white.withValues(alpha: on ? 0.55 : 0.22)),
-                width: highlighted ? 2.0 : 1.4,
-              ),
-              // 光晕整体跟着亮度缩放:调暗时不只是变淡,散开的范围也收小
-              boxShadow: lit
-                  ? [
-                      BoxShadow(
-                        color: glow.withValues(alpha: 0.78 * intensity),
-                        blurRadius: d * (0.45 + 0.65 * intensity),
-                        spreadRadius: d * 0.30 * intensity,
-                      ),
-                      BoxShadow(
-                        color: glow.withValues(alpha: 0.38 * intensity),
-                        blurRadius: d * (0.9 + 1.7 * intensity),
-                        spreadRadius: d * 0.78 * intensity,
-                      ),
-                    ]
-                  : (highlighted
-                      ? [
-                          BoxShadow(
-                            color: AppColors.accent.withValues(alpha: 0.5),
-                            blurRadius: 12,
-                            spreadRadius: 2,
-                          )
-                        ]
-                      : null),
-            ),
+            decoration: _outerDeco(d, isBar, h),
             alignment: Alignment.center,
-            child: label == null
-                ? null
-                : Text(
-                    label!,
-                    style: TextStyle(
-                      fontSize: (d * 0.5).clamp(9.0, 14.0),
-                      fontWeight: FontWeight.w700,
-                      color: lit ? Colors.black87 : Colors.white70,
-                    ),
-                  ),
+            child: style == LampStyle.ring
+                ? _ring(d, isBar, w, h)
+                : _labelText(d),
           ),
         ),
       ),
     );
   }
+
+  bool get _lit => style != LampStyle.dark;
+
+  /// 灯体本身。氛围灯模式下灯体不发光 —— 亮的是里面那圈环。
+  BoxDecoration _outerDeco(double d, bool isBar, double h) {
+    final solid = style == LampStyle.spot || style == LampStyle.drl;
+
+    return BoxDecoration(
+      shape: isBar ? BoxShape.rectangle : BoxShape.circle,
+      borderRadius: isBar ? BorderRadius.circular(h / 2) : null,
+      // 灯芯:亮度低时压暗,但不压到看不见。
+      // 氛围灯不填灯芯,保持暗底,黄环才显得是"外面一圈"。
+      color: solid
+          ? glow.withValues(alpha: 0.30 + 0.65 * intensity)
+          : Colors.black.withValues(alpha: 0.35),
+      border: Border.all(
+        color: solid
+            ? glow
+            : (highlighted
+                ? AppColors.accent
+                : Colors.white.withValues(alpha: on ? 0.55 : 0.22)),
+        width: highlighted ? 2.0 : 1.4,
+      ),
+      // 光晕整体跟着亮度缩放:调暗时不只是变淡,散开的范围也收小。
+      // 氛围灯的光晕由里面那圈环自己带,这里不重复画。
+      boxShadow: solid
+          ? [
+              BoxShadow(
+                color: glow.withValues(alpha: 0.78 * intensity),
+                blurRadius: d * (0.45 + 0.65 * intensity),
+                spreadRadius: d * 0.30 * intensity,
+              ),
+              BoxShadow(
+                color: glow.withValues(alpha: 0.38 * intensity),
+                blurRadius: d * (0.9 + 1.7 * intensity),
+                spreadRadius: d * 0.78 * intensity,
+              ),
+            ]
+          : (highlighted && !_lit
+              ? [
+                  BoxShadow(
+                    color: AppColors.accent.withValues(alpha: 0.5),
+                    blurRadius: 12,
+                    spreadRadius: 2,
+                  )
+                ]
+              : null),
+    );
+  }
+
+  /// 氛围灯:在灯的区域里面画一圈黄环,中间空着。
+  ///
+  /// 车上那圈氛围灯就是围着射灯一圈的灯带,画成实心就跟射灯白光分不出来了。
+  Widget _ring(double d, bool isBar, double w, double h) {
+    final rw = w * 0.74;
+    final rh = isBar ? h * 0.62 : h * 0.74;
+    final stroke = (d * 0.10).clamp(1.6, 4.0);
+
+    return Container(
+      width: rw,
+      height: rh,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        shape: isBar ? BoxShape.rectangle : BoxShape.circle,
+        borderRadius: isBar ? BorderRadius.circular(rh / 2) : null,
+        border: Border.all(
+          color: glow.withValues(alpha: (0.45 + 0.55 * intensity).clamp(0.0, 1.0)),
+          width: stroke,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: glow.withValues(alpha: 0.55 * intensity),
+            blurRadius: d * (0.30 + 0.45 * intensity),
+            spreadRadius: d * 0.10 * intensity,
+          ),
+        ],
+      ),
+      child: _labelText(d),
+    );
+  }
+
+  Widget? _labelText(double d) => label == null
+      ? null
+      : Text(
+          label!,
+          style: TextStyle(
+            fontSize: (d * 0.5).clamp(9.0, 14.0),
+            fontWeight: FontWeight.w700,
+            // 实心发光时灯芯很亮,黑字才看得清;
+            // 氛围灯和灭灯时中间是暗的,用白字。
+            color: (style == LampStyle.spot || style == LampStyle.drl)
+                ? Colors.black87
+                : Colors.white70,
+          ),
+        );
 }
 
-/// 光束:从每个点亮的灯位向左前方射出一道渐隐的光
+/// 光束:从每组点亮的射灯向左前方射出一道渐隐的光
 class _BeamPainter extends CustomPainter {
   final List<Offset> origins;
   final List<double> sizes;

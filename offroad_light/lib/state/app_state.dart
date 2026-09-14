@@ -11,8 +11,7 @@ enum ConnState { disconnected, connecting, connected }
 /// 全局状态。
 ///
 /// 【谁说了算】设备是唯一权威:任何一帧 0x20 上报都会无条件覆盖本地状态。
-/// 因为改变状态的不只有手机 —— 车上的语音、光敏、雨滴传感器都会改,
-/// 手机自己记的那份随时可能是过期的。
+/// 因为改变状态的不只有手机 —— 车上的语音也会改,手机自己记的那份随时可能是过期的。
 ///
 /// 本地点击时先乐观更新一次界面(消掉蓝牙往返的延迟感),
 /// 紧接着设备就会推真实状态回来纠正。指令丢了也不怕:设备每 2 秒兜底报一次。
@@ -53,20 +52,16 @@ class AppState extends ChangeNotifier {
   ConnState conn = ConnState.disconnected;
   String statusLog = '';
 
-  // ---- 灯光状态(默认值 = 固件的出厂默认:白光常亮、全部灯位打开) ----
-  int mode = LightMode.steady;
-  int lampMask = 0xFF;
+  // ---- 灯光状态 ----
+  /// 当前模式。固件上电默认是关灯(车子点火不能自己亮),这里跟着默认关。
+  int mode = LightMode.off;
+
+  /// 16 位通道掩码,第 N 位 = CH N 的总开关。
+  /// 每组第 4 位(CH3/7/11/15)恒为 0 —— 那一路没接线。
+  int chMask = kChMaskAll;
+
+  /// 白光模式的亮度。日行灯和氛围灯是固定满亮,不受它影响。
   int brightness = 100;
-
-  /// 用户【选定】的颜色,0=白 1=黄。白/黄那个切换开关显示的是它。
-  int userColor = LightColorId.white;
-
-  /// 这一刻【实际输出】的颜色。正常等于 userColor,
-  /// 只有自动模式遇上下雨才被设备临时改成黄光 —— 车图上的发光颜色用它。
-  int activeColor = LightColorId.white;
-
-  bool night = false;
-  bool rain = false;
 
   /// 是否收到过设备的状态上报。没连上时界面显示的只是上次的记忆值。
   bool synced = false;
@@ -81,16 +76,15 @@ class AppState extends ChangeNotifier {
   /// Notify 订阅成功了没(订不上就收不到任何上报)
   bool get notifyReady => ble?.notifyReady ?? false;
 
-  /// 灯这一刻是不是黄的(界面配色跟着它走)
-  bool get isYellow => activeColor == LightColorId.yellow;
-
-  /// 用户选的是不是黄光(白/黄开关的位置跟着它走)
-  bool get pickedYellow => userColor == LightColorId.yellow;
-
-  /// 自动模式下雨滴把颜色抢走了 —— 界面要说明一下为什么和所选的不一样
-  bool get colorOverridden => activeColor != userColor;
-
   bool get isConnected => conn == ConnState.connected;
+
+  bool get isOff => mode == LightMode.off;
+
+  /// 当前模式实际驱动的功能通道(关灯时为 null)
+  int? get activeFn => activeFnOf(mode);
+
+  /// 车图上该画成黄色还是白色
+  bool get isAmbient => isAmbientMode(mode);
 
   // ---- 上次连接的设备,下次打开自动连回去 ----
   String? get savedDeviceId => prefs.getString('device_id');
@@ -111,14 +105,10 @@ class AppState extends ChangeNotifier {
   }
 
   /// 收到设备上报:无条件覆盖本地状态。
-  void applyStatus(DeviceStatus s) {
-    mode = s.mode;
-    lampMask = s.lampMask;
-    brightness = s.brightness;
-    activeColor = s.color;
-    userColor = s.userColor;
-    night = s.night;
-    rain = s.rain;
+  void applyStatus(DeviceStatus st) {
+    mode = st.mode;
+    chMask = st.chMask & kChMaskAll;
+    brightness = st.brightness;
     synced = true;
     reportCount++;
     notifyListeners();
@@ -127,88 +117,100 @@ class AppState extends ChangeNotifier {
   /// 处理设备发来的任意封包
   void onDeviceMessage(int op, List<int> payload) {
     if (op == Protocol.opStatus) {
-      final s = DeviceStatus.parse(payload);
-      if (s != null) applyStatus(s);
+      final st = DeviceStatus.parse(payload);
+      if (st != null) applyStatus(st);
     }
   }
 
-  // ---- 灯位查询 ----
-  bool isLampOn(int id) => (lampMask & (1 << id)) != 0;
+  // ---- 通道 / 灯组查询 ----
 
-  /// 一组里只要全亮才算这组"开着"。半开状态在界面上单独显示。
-  bool isGroupOn(LampGroup g) => g.lampIds.every(isLampOn);
-  bool isGroupPartial(LampGroup g) =>
-      g.lampIds.any(isLampOn) && !g.lampIds.every(isLampOn);
+  /// 某一路通道的总开关是不是开着
+  bool isChOn(int ch) => (chMask & (1 << ch)) != 0;
 
-  int get onCount => kLamps.where((l) => isLampOn(l.id)).length;
+  /// 一组的 3 路全开才算这组"开着"。半开状态在界面上单独显示。
+  bool isGroupOn(LampGroup g) =>
+      LampFn.all.every((fn) => isChOn(chOf(g.id, fn)));
 
-  /// 灯位开着,并且当前模式确实在出光 —— 车图上只有这种才画成发光的
-  bool isLampLit(int id) => isLampOn(id) && mode != LightMode.off;
+  bool isGroupPartial(LampGroup g) {
+    final on = LampFn.all.where((fn) => isChOn(chOf(g.id, fn))).length;
+    return on > 0 && on < LampFn.all.length;
+  }
+
+  /// 开着的组数(只要有一路开着就算)
+  int get onGroupCount => kGroups
+      .where((g) => LampFn.all.any((fn) => isChOn(chOf(g.id, fn))))
+      .length;
+
+  /// 这一组这会儿到底亮不亮 —— 车图上只有这种才画成发光的。
+  ///
+  /// 要同时满足:有模式在出光,而且【当前模式那一路】的掩码位是开的。
+  /// 唯一例外是爆闪:固件那边无视掩码 4 组一起闪,界面得跟着一起闪,
+  /// 否则会出现"手机上某组不闪、车上却在闪"的对不上。
+  bool isGroupLit(int groupId) {
+    if (mode == LightMode.off) return false;
+    if (mode == LightMode.flash) return true; // 爆闪无视掩码,全车都闪
+    final fn = activeFn;
+    if (fn == null) return false;
+    return isChOn(chOf(groupId, fn));
+  }
 
   /// 这一刻灯的实际亮度 0~100,车图按它决定光点画多亮。
   ///
-  /// 只有常亮模式跟滑条走;日行是固定低亮、自动看光敏、爆闪走节奏表,
-  /// 都是固件说了算,这里照着固件的常量算一份。
+  /// 只有白光模式跟滑条走;日行灯和氛围灯是固件定死的满亮,爆闪走节奏表。
   int get effectiveDuty => switch (mode) {
         LightMode.off => 0,
-        LightMode.steady => brightness,
+        LightMode.white => brightness,
         LightMode.drl => FixedDuty.drl,
-        LightMode.auto => night ? FixedDuty.autoNight : FixedDuty.autoDay,
+        LightMode.ambient => FixedDuty.ambient,
         LightMode.flash => FixedDuty.flash,
         _ => 0,
       };
 
-  /// 归一化成 0~1,给界面调发光强度用
-  double get lightIntensity => (effectiveDuty / 100).clamp(0.0, 1.0);
+  /// 车图上画多亮 0~1。
+  ///
+  /// 占空比再乘一个【显示折扣】:日行灯和氛围灯虽然也给满占空比,
+  /// 但那是另外一串灯珠,物理上就比射灯暗一大截,画面得跟车上看到的一致。
+  double get lightIntensity =>
+      ((effectiveDuty / 100) * displayScaleOf(mode)).clamp(0.0, 1.0);
+
+  /// 亮度滑条只在白光模式下有意义,其余模式的亮度是固件定死的
+  bool get brightnessAdjustable => mode == LightMode.white;
 
   // ---- 操作(乐观更新 + 下发) ----
 
-  /// 只切模式,不动颜色
+  /// 切模式。掩码不动 —— 模式和掩码是两个独立维度。
   void setMode(int m) {
     mode = m;
-    // 除了自动模式(颜色可能被雨滴抢走),其它模式的颜色就是用户选的那个
-    if (m != LightMode.auto) activeColor = userColor;
     notifyListeners();
     ble?.send(Protocol.mode(m));
   }
 
-  /// 只切颜色,不动模式 —— 日行/爆闪/常亮都会立刻换成这个颜色
-  void setColor(int c) {
-    userColor = c;
-    // 自动模式下雨时颜色归传感器管,这里不抢,等设备上报
-    if (mode != LightMode.auto) activeColor = c;
+  /// 单路通道开关(详情页那 12 个开关用)
+  void toggleCh(int ch) {
+    final on = !isChOn(ch);
+    chMask = (on ? (chMask | (1 << ch)) : (chMask & ~(1 << ch))) & kChMaskAll;
     notifyListeners();
-    ble?.send(Protocol.color(c));
+    ble?.send(Protocol.channel(ch, on));
   }
 
-  void toggleColor() => setColor(
-      pickedYellow ? LightColorId.white : LightColorId.yellow);
-
-  void toggleLamp(int id) {
-    final on = !isLampOn(id);
-    lampMask = on ? (lampMask | (1 << id)) : (lampMask & ~(1 << id));
-    notifyListeners();
-    ble?.send(Protocol.lamp(id, on));
-  }
-
+  /// 整组开关:一次切这组的 3 路。
+  /// 全开就关掉;否则(全灭或半开)一律打开,点一下就有反应。
   void toggleGroup(LampGroup g) {
-    // 整组全亮就关掉;否则(全灭或半开)一律点亮,点一下就有反应
     final on = !isGroupOn(g);
-    for (final id in g.lampIds) {
-      lampMask = on ? (lampMask | (1 << id)) : (lampMask & ~(1 << id));
-    }
+    final bits = groupBits(g.id);
+    chMask = (on ? (chMask | bits) : (chMask & ~bits)) & kChMaskAll;
     notifyListeners();
     ble?.send(Protocol.group(g.id, on));
   }
 
-  void setLampMask(int mask) {
-    lampMask = mask & 0xFF;
+  void setChMask(int mask) {
+    chMask = mask & kChMaskAll;
     notifyListeners();
-    ble?.send(Protocol.lampMask(lampMask));
+    ble?.send(Protocol.chMask(chMask));
   }
 
-  void allOn() => setLampMask(0xFF);
-  void allOff() => setLampMask(0x00);
+  void allOn() => setChMask(kChMaskAll);
+  void allOff() => setChMask(0);
 
   DateTime _lastBrightSend = DateTime.fromMillisecondsSinceEpoch(0);
 
@@ -243,7 +245,7 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  int _lastLitMode = LightMode.steady;
+  int _lastLitMode = LightMode.white;
 
   /// 界面重新拉一次设备状态(下拉刷新 / 重连之后)
   void refresh() => ble?.send(Protocol.query());

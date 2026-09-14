@@ -39,23 +39,24 @@ class S {
 
   // ── 模式 ──────────────────────────────────────────
   String get modeOff => zh ? '关灯' : 'Off';
-  String get modeSteady => zh ? '常亮' : 'Steady';
-  String get modeDrl => zh ? '日行' : 'DRL';
-  String get modeAuto => zh ? '自动' : 'Auto';
+  String get modeWhite => zh ? '白光' : 'White';
+  String get modeDrl => zh ? '日行灯' : 'DRL';
+  String get modeAmbient => zh ? '氛围灯' : 'Ambient';
   String get modeFlash => zh ? '爆闪' : 'Strobe';
   String get modeUnknown => zh ? '未知' : 'Unknown';
 
-  String get hintSteady => zh ? '按设定亮度一直亮着' : 'Stays on at the set brightness';
-  String get hintDrl => zh ? '低亮度长亮，白天示宽用' : 'Dim and constant, for daytime running';
-  String get hintAuto =>
-      zh ? '光敏定亮度，下雨临时转黄光' : 'Light sensor sets brightness; rain switches to yellow';
-  String get hintFlash => zh ? '三连闪 + 间隔，警示用' : 'Triple flash + pause, for warning';
+  String get hintWhite =>
+      zh ? '射灯白光常亮，亮度可调' : 'Spotlights on white, brightness adjustable';
+  String get hintDrl => zh ? '只亮日行灯，白天示宽用' : 'Daytime running lights only';
+  String get hintAmbient =>
+      zh ? '只亮灯外圈那圈黄光' : 'Only the amber ring around each lamp';
+  String get hintFlash =>
+      zh ? '白光三连闪，四组一起闪' : 'White triple flash — all four groups together';
 
-  // ── 颜色 ──────────────────────────────────────────
-  String get white => zh ? '白光' : 'White';
-  String get yellow => zh ? '黄光' : 'Yellow';
-  String get rainOverride =>
-      zh ? '检测到下雨，已临时转黄光' : 'Rain detected — temporarily on yellow';
+  // ── 三个功能（每组灯的三路）────────────────────────
+  String get fnSpot => zh ? '射灯白光' : 'Spotlight';
+  String get fnDrl => zh ? '日行灯' : 'DRL';
+  String get fnAmbient => zh ? '氛围灯' : 'Ambient';
 
   // ── 灯组 ──────────────────────────────────────────
   String get groupBumper => zh ? '前包围' : 'Bumper';
@@ -63,33 +64,29 @@ class S {
   String get groupPillarHigh => zh ? '立柱上' : 'Pillar High';
   String get groupRoof => zh ? '车顶' : 'Roof';
 
-  String get subBumper => zh ? '保险杠两侧 · 2 只' : 'Bumper sides · 2 lamps';
-  String get subPillarLow => zh ? 'A 柱下 · 2 只' : 'Lower A-pillar · 2 lamps';
-  String get subPillarHigh => zh ? 'A 柱上 · 2 只' : 'Upper A-pillar · 2 lamps';
-  String get subRoof => zh ? '行李架 · 2 只' : 'Roof rack · 2 lamps';
-
-  // ── 灯位 ──────────────────────────────────────────
-  String get lampBumperL => zh ? '前包围左' : 'Bumper L';
-  String get lampBumperR => zh ? '前包围右' : 'Bumper R';
-  String get lampPillarLowL => zh ? '立柱下左' : 'Pillar Low L';
-  String get lampPillarLowR => zh ? '立柱下右' : 'Pillar Low R';
-  String get lampPillarHighL => zh ? '立柱上左' : 'Pillar High L';
-  String get lampPillarHighR => zh ? '立柱上右' : 'Pillar High R';
-  String get lampRoofL => zh ? '车顶左' : 'Roof L';
-  String get lampRoofR => zh ? '车顶右' : 'Roof R';
+  String get subBumper => zh ? '保险杠两侧' : 'Bumper sides';
+  String get subPillarLow => zh ? 'A 柱下' : 'Lower A-pillar';
+  String get subPillarHigh => zh ? 'A 柱上' : 'Upper A-pillar';
+  String get subRoof => zh ? '行李架' : 'Roof rack';
 
   // ── 主页 ──────────────────────────────────────────
-  String lampCount(int on, int total) =>
-      zh ? '$on/$total 灯位' : '$on/$total lamps';
+  String groupCount(int on, int total) =>
+      zh ? '$on/$total 组' : '$on/$total groups';
   String get brightness => zh ? '亮度' : 'Brightness';
-  String get singleLamp => zh ? '单灯控制' : 'Single Lamp';
+  String get brightnessLocked =>
+      zh ? '该模式亮度固定' : 'Fixed brightness in this mode';
+  String get channelDetail => zh ? '分路控制' : 'Channels';
 
-  // ── 单灯页 ────────────────────────────────────────
-  String get singleLampHint => zh
-      ? '点车图上的光点，或用下面的开关，单独控制每一只灯'
-      : 'Tap a light on the photo, or use the switches below, to control each lamp';
-  String channels(int yellow, int white) =>
-      zh ? '黄光 CH$yellow  ·  白光 CH$white' : 'Yellow CH$yellow  ·  White CH$white';
+  // ── 分路控制页 ────────────────────────────────────
+  String get channelHint => zh
+      ? '12 路独立开关。每组灯有射灯白光、日行灯、氛围灯三路，关掉的那一路在对应模式下就不亮。'
+      : '12 independent channels. Each group has a spotlight, a DRL and an ambient ring; a channel switched off stays dark in its mode.';
+  String get flashIgnoresMask => zh
+      ? '爆闪模式无视这些开关，四组射灯一起闪'
+      : 'Strobe ignores these switches — all four spotlight groups flash together';
+  String channelNo(int ch) => zh ? '通道 CH$ch' : 'Channel CH$ch';
+  String get activeNow => zh ? '当前模式在用' : 'Active now';
+  String get allGroupsFlash => zh ? '四组全闪' : 'All 4 flashing';
 
   // ── 车图 ──────────────────────────────────────────
   String get noCarImage => zh ? '还没有车辆图片' : 'No vehicle image yet';
