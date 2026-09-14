@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 
+import '../ble/protocol.dart';
 import '../i18n/strings.dart';
 import '../models/lamp.dart';
 import '../state/app_state.dart';
@@ -63,6 +64,12 @@ class HomeScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  // 固件和 App 不是同一版的时候,下面显示的一切都不可信,
+                  // 所以这条横幅顶在最上面,别让人对着错的状态排查半天
+                  if (state.versionMismatch) ...[
+                    _FwMismatchBanner(state: state),
+                    const SizedBox(height: 8),
+                  ],
                   _StatusBar(state: state),
                   const SizedBox(height: 8),
 
@@ -193,6 +200,61 @@ class _ConnChip extends StatelessWidget {
             Text(text, style: TextStyle(fontSize: 12, color: color)),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 固件版本对不上时顶在最上面的横幅。
+///
+/// 这种错配最难查:App 能连上、状态也在刷,就是行为不对 ——
+/// 因为同样长度的几个字节在两版固件里含义不一样。直接说清楚要重烧固件。
+class _FwMismatchBanner extends StatelessWidget {
+  final AppState state;
+  const _FwMismatchBanner({required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = state.s;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.accent.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.accent.withValues(alpha: 0.55)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.warning_amber_rounded,
+              size: 18, color: AppColors.accent),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  s.fwMismatch,
+                  style: const TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textHi,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  s.fwMismatchDetail(
+                      state.deviceVersion ?? 0, Protocol.fwVersion),
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    height: 1.45,
+                    color: AppColors.textLo,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

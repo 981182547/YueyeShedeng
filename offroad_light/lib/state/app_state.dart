@@ -70,6 +70,17 @@ class AppState extends ChangeNotifier {
   /// 是否收到过设备的状态上报。没连上时界面显示的只是上次的记忆值。
   bool synced = false;
 
+  /// 设备报上来的固件协议版本。还没收到过上报时是 null。
+  int? deviceVersion;
+
+  /// 固件和 App 不是同一版 —— 界面上要拦一下。
+  ///
+  /// 不匹配的时候界面显示的状态是不可信的:v2 的固件里 chMask 是"允许亮",
+  /// v3 的 App 当成"正在亮"来画,于是切模式不复位、灯色对不上,
+  /// 看起来像 App 有 bug,其实是固件没跟着烧。
+  bool get versionMismatch =>
+      deviceVersion != null && deviceVersion != Protocol.fwVersion;
+
   /// 收到过多少帧设备上报。
   ///
   /// 排查"车上用语音改了灯、手机没跟着变"就看它:
@@ -106,12 +117,22 @@ class AppState extends ChangeNotifier {
     if (c != ConnState.connected) {
       synced = false;
       reportCount = 0;
+      deviceVersion = null; // 换设备可能换固件版本,别沿用上一台的
     }
     notifyListeners();
   }
 
   /// 收到设备上报:无条件覆盖本地状态。
+  ///
+  /// 版本对不上就【只记版本、不覆盖状态】—— 旧固件那几个字节按新格式解出来
+  /// 是没有意义的数字,拿它去刷界面只会让人以为是 App 坏了。
+  /// 界面那边会顶一条横幅出来提示重烧固件。
   void applyStatus(DeviceStatus st) {
+    deviceVersion = st.version;
+    if (versionMismatch) {
+      notifyListeners();
+      return;
+    }
     mode = st.mode;
     chMask = st.chMask & kChMaskAll;
     brightness = st.brightness;

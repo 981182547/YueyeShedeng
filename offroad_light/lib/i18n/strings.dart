@@ -87,6 +87,14 @@ class S {
       ? '这 12 路已经手动改过，和「$mode」的默认不一样了。点一下下面的模式按钮就能恢复。'
       : 'These 12 channels were changed by hand and no longer match "$mode". Tap a mode button below to reset.';
 
+  // ── 固件版本不匹配 ────────────────────────────────
+  String get fwMismatch => zh ? '固件版本不匹配' : 'Firmware version mismatch';
+  String fwMismatchDetail(int device, int need) => zh
+      ? '控制器上是 v$device 的固件，这个 App 需要 v$need。\n'
+          '界面显示的状态不可信，请把 smart_spotlight_ble.ino 重新烧一遍。'
+      : 'The controller runs firmware v$device but this app needs v$need.\n'
+          'The status shown here is unreliable — reflash smart_spotlight_ble.ino.';
+
   // ── 车图 ──────────────────────────────────────────
   String get noCarImage => zh ? '还没有车辆图片' : 'No vehicle image yet';
   String get noCarImageHint => zh

@@ -16,6 +16,14 @@ class Protocol {
   static const deviceName = 'OffRoad-Light';
   static const magic = 0xA5;
 
+  /// 这个 App 要求的固件协议版本,必须和固件里的 FW_VERSION 一致。
+  ///
+  /// 改了封包格式【或者改了状态的语义】两边就都要 +1。语义也算 ——
+  /// v2 到 v3 封包一个字节没变,但 chMask 的含义从"允许亮"改成了"正在亮",
+  /// 拿 v2 的固件配 v3 的 App,界面显示的东西是错的却看不出哪里错,
+  /// 排查半天才发现是烧错了固件。宁可直接报版本不匹配。
+  static const fwVersion = 3;
+
   // ---- App -> 设备 ----
   static const opText = 0x01; // ASCII 调试命令
   static const opMode = 0x10; // [mode]        切换模式

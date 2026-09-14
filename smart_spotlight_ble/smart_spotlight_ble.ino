@@ -116,7 +116,10 @@
 #define DUTY_DRL         100     /* 日行灯亮度（固定，不跟滑条） */
 #define DUTY_AMBIENT     100     /* 氛围灯亮度（固定，不跟滑条） */
 
-#define FW_VERSION       2       /* 固件协议版本，随状态一起上报 */
+#define FW_VERSION       3       /* 协议版本，随状态一起上报。
+                                    改了封包格式【或者改了状态的语义】就必须 +1 ——
+                                    App 靠它判断固件是不是同一版，对不上会直接报错，
+                                    而不是拿着旧固件的数据瞎显示。 */
 
 HardwareSerial ASR(1);           /* 用 UART1，避开 USB CDC 日志 */
 Preferences    prefs;            /* NVS：只记亮度 */
