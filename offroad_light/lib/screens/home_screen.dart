@@ -30,12 +30,12 @@ class HomeScreen extends StatelessWidget {
               const SizedBox(width: 6),
               _ConnChip(state: state),
               IconButton(
-                tooltip: state.mode == LightMode.off ? s.turnOn : s.turnOff,
+                // 看【实际亮没亮】,不看模式 —— 分路控制页可以在关灯模式下
+                // 手动点亮某一路,那时候这个按钮得是亮的
+                tooltip: state.allDark ? s.turnOn : s.turnOff,
                 icon: Icon(
                   Icons.power_settings_new,
-                  color: state.mode == LightMode.off
-                      ? AppColors.textLo
-                      : AppColors.accent,
+                  color: state.allDark ? AppColors.textLo : AppColors.accent,
                 ),
                 onPressed: state.togglePower,
               ),
@@ -207,8 +207,10 @@ class _StatusBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = state.s;
-    final lightColor = lightColorOf(state.mode);
-    final off = state.isOff;
+    // 状态点的颜色看【实际亮着的是哪一路】,不看模式 ——
+    // 在白光模式下手动只留一路氛围灯,这个点也该是黄的。
+    final lightColor = state.litColor;
+    final off = state.allDark;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -245,13 +247,25 @@ class _StatusBar extends StatelessWidget {
               fontWeight: FontWeight.w600,
             ),
           ),
+          // 12 路被手动改过,和模式的默认不一样了。
+          // 不标一下的话,"选着白光却亮着黄的"会让人以为是 bug。
+          if (state.customized) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              decoration: BoxDecoration(
+                color: AppColors.textLo.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(5),
+              ),
+              child: Text(
+                s.customized,
+                style: const TextStyle(fontSize: 10, color: AppColors.textLo),
+              ),
+            ),
+          ],
           const Spacer(),
-          // 爆闪时固件无视通道掩码,四组一起闪 —— 这时显示「x/4 组」会对不上,
-          // 所以直接说明白在全闪,免得用户对着关掉的那组发懵。
           Text(
-            state.mode == LightMode.flash
-                ? s.allGroupsFlash
-                : s.groupCount(state.onGroupCount, kGroupCount),
+            s.groupCount(state.onGroupCount, kGroupCount),
             style: const TextStyle(color: AppColors.textLo, fontSize: 12.5),
           ),
         ],
@@ -286,12 +300,14 @@ class _GroupCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = state.s;
-    final on = state.isGroupOn(group);
-    final partial = state.isGroupPartial(group);
-    final lightColor = lightColorOf(state.mode);
-    // 高亮与否跟着车图走:看的是【当前模式那一路】亮没亮,
-    // 而不是"这组有没有开关是开的"。否则会出现图上灯灭着、卡片却高亮。
+    // 亮不亮只看"有没有任意一路开着"。
+    //
+    // 不用"三路全开才算开"那套了:新模型下白光模式每组只点射灯一路,
+    // 按全开判定的话四张卡片会永远显示「半开」—— 一路开在这里是常态,
+    // 不是中间状态,拆到哪一路是分路控制页的事。
     final active = state.isGroupLit(group.id);
+    // 卡片染成这组【实际亮着的那一路】的颜色
+    final lightColor = state.groupLitColor(group.id);
 
     return GestureDetector(
       onTap: () => state.toggleGroup(group),
@@ -312,7 +328,7 @@ class _GroupCard extends StatelessWidget {
         child: Column(
           children: [
             Icon(
-              on ? Icons.lightbulb : Icons.lightbulb_outline,
+              active ? Icons.lightbulb : Icons.lightbulb_outline,
               size: 20,
               color: active ? lightColor : AppColors.textLo,
             ),
@@ -329,7 +345,7 @@ class _GroupCard extends StatelessWidget {
             ),
             const SizedBox(height: 2),
             Text(
-              partial ? s.partial : (on ? s.on : s.off),
+              active ? s.on : s.off,
               style: TextStyle(
                 fontSize: 10.5,
                 color: active ? lightColor : AppColors.offline,
@@ -354,14 +370,12 @@ class _BrightnessBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = state.s;
-    // 只有白光模式的亮度是用户说了算。
-    // 日行灯和氛围灯固件里就是给满的,爆闪走节奏表,这三个手动调没有意义。
+    // 滑条只管射灯那一路。日行灯和氛围灯固件里就是给满的,没什么可调的,
+    // 所以一路射灯都没亮的时候把滑条置灰。
     final adjustable = state.brightnessAdjustable;
-    // 不可调的时候显示固件真正在用的那个亮度,而不是滑条记着的值,
-    // 否则日行模式下会显示上次拖到的 60%,和车上看到的对不上。
-    final shown = adjustable ? state.brightness : state.effectiveDuty;
-    final lightColor = lightColorOf(state.mode);
-    final off = state.isOff;
+    final shown = state.brightness;
+    const lightColor = AppColors.lightWhite; // 调的是射灯,射灯是白的
+    final off = !adjustable;
 
     return LayoutBuilder(
       builder: (context, c) {

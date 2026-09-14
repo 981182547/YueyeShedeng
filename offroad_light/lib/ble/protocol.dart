@@ -5,10 +5,9 @@ import 'dart:typed_data';
 ///
 /// 封包: [0xA5][OP][LEN_hi][LEN_lo][payload...]
 ///
-/// 设计要点:模式和通道掩码是两个【互相独立】的维度。
-///   模式 关闭/白光/日行灯/氛围灯/爆闪 —— 亮哪一路功能,互斥
-///   掩码 16 位                        —— 哪几路允许亮
-/// 切模式不会把掩码弄丢,开关灯组也不打断当前模式。
+/// 设计要点:通道掩码就是"哪几路正在输出",模式只是个【预设图章】——
+/// 切模式的那一刻往 12 路上盖一张掩码,盖完就不管了,之后这 12 位由用户说了算。
+/// 模式剩下的唯一作用:射灯那一路要不要按节奏闪。
 class Protocol {
   static const serviceUuid = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
   static const rxUuid = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // App 写入
@@ -22,8 +21,9 @@ class Protocol {
   static const opMode = 0x10; // [mode]        切换模式
   static const opChMask = 0x11; // [hi, lo]    一次设置 16 位通道掩码
   static const opCh = 0x12; // [ch, on]        单个通道开关
-  static const opGroup = 0x13; // [groupId, on] 整组开关(该组 3 个功能一起)
-  static const opBright = 0x14; // [duty 0~100]
+  // 0x13 原来是 opGroup。整组开关现在由 App 算好整张掩码走 opChMask 下发,
+  // 省得"整组怎么算"这条规则在固件和 App 各写一遍、哪天改歪了对不上。
+  static const opBright = 0x14; // [duty 0~100] 射灯白光的亮度
   static const opQuery = 0x15; // []           请求上报当前状态
 
   // ---- 设备 -> App(Notify) ----
@@ -51,8 +51,6 @@ class Protocol {
   static Uint8List channel(int ch, bool on) =>
       frame(opCh, [ch & 0xFF, on ? 1 : 0]);
 
-  static Uint8List group(int id, bool on) => frame(opGroup, [id & 0xFF, on ? 1 : 0]);
-
   static Uint8List brightness(int duty) =>
       frame(opBright, [duty.clamp(0, 100)]);
 
@@ -66,11 +64,11 @@ class Protocol {
 class DeviceStatus {
   final int mode;
 
-  /// 16 位通道掩码,第 N 位 = CH N 的总开关。
+  /// 16 位通道掩码,第 N 位 = CH N【现在亮不亮】。
   /// 每组第 4 位(CH3/7/11/15)恒为 0 —— 那一路没接线。
   final int chMask;
 
-  /// 白光模式的亮度 0~100。日行灯和氛围灯是固定满亮,不受它影响。
+  /// 射灯白光那一路的亮度 0~100。日行灯和氛围灯是固定满亮,不受它影响。
   final int brightness;
 
   final int version;

@@ -20,29 +20,34 @@
  *   前包围 = 保险杠两侧那对大圆灯    立柱下 = A 柱上【下面】那对圆灯
  *   立柱上 = A 柱上【上面】那对圆灯  车顶   = 行李架上那对横条灯
  *
- * ── 模式决定发什么光 ──────────────────────────────────────
- * 没有独立的"颜色"设置了 —— 选了哪个模式就亮哪一路灯，互斥：
+ * ── 没有独立的"颜色"设置 ──────────────────────────────────
+ * 白光就是射灯那一路，氛围灯就是外圈黄光那一路，各走各的通道。
  *
- *   模式        射灯白      日行灯    氛围灯    亮度来源
- *   关闭(0)      -          -        -        全灭
- *   白光(1)      ✓          -        -        manualDuty（手机滑条）
- *   日行灯(2)    -          ✓        -        DUTY_DRL
- *   氛围灯(3)    -          -        ✓        DUTY_AMBIENT
- *   爆闪(4)      ✓按节奏     -        -        节奏表
+ * 【黄光不爆闪】是结构上保证的：爆闪只作用在射灯白光那一路，
+ * 就算你在爆闪模式下手动点亮氛围灯，它也是常亮，不会跟着闪。
  *
- * 【黄光不爆闪】是结构上保证的：爆闪只驱动射灯白光那一路，
- * 氛围灯通道在爆闪模式下恒为 0，想闪也闪不了。
+ * ── 通道掩码 chMask 就是"哪几路正在输出" ──────────────────
+ * 16 位，第 N 位 = CH N 现在亮不亮（每组第 4 位恒 0，那一路没接线）。
+ * 它没有别的含义 —— 不是"允许亮"，就是"亮着"。
  *
- * ── 通道掩码 chMask ───────────────────────────────────────
- * 16 位，第 N 位就是 CH N 的总开关（每组第 4 位恒 0，那一路没接线）。
- * 掩码和模式正交：模式决定"亮哪一路功能"，掩码决定"哪几路允许亮"。
- * 手机上：主页 4 个组开关 = 一次切该组的 3 个位；
- *         详情页 12 个开关 = 逐个切。
- * 唯一例外：爆闪无视掩码，4 组一起闪（警示灯要的就是全车都看得见）。
+ * 模式因此退化成一个【预设】：切模式的时候往 12 路上盖一个图章，
+ * 盖完就不管了，之后这 12 位由用户说了算：
+ *
+ *   关灯   -> 全灭            白光/爆闪 -> 4 组的射灯白 CH0/4/8/12
+ *   日行灯 -> CH1/5/9/13      氛围灯    -> CH2/6/10/14
+ *
+ * 所以手机上那 12 个开关是【最高权限】，想单独点亮哪一路就点哪一路，
+ * 不受当前模式约束；只有切到一个新模式才会被图章覆盖回去。
+ *
+ * 模式剩下的唯一作用是：射灯那一路要不要按节奏闪。
+ *
+ * ── 亮度按【功能】算，不按模式 ────────────────────────────
+ * 射灯白光跟手机滑条，日行灯和氛围灯固定满亮。这样在白光模式下手动
+ * 点一路氛围灯，它照样按氛围灯自己的亮度亮，两者互不干扰。
  *
  * ── 上电默认 ──────────────────────────────────────────────
- * 车子点火后【默认关闭】，模式不做掉电记忆。
- * 亮度和通道掩码照旧存 NVS —— 一开灯就是上次的亮度、上次选的那几组。
+ * 车子点火后【默认关闭】，模式和通道都不做掉电记忆（开机 chMask = 0）。
+ * 只有亮度存 NVS —— 一开白光就是上次拖到的那个亮度。
  *
  * ── 硬件连接 ───────────────────────────────────────────────
  *   IO4  -> PCA9685 SDA        IO5  -> PCA9685 SCL
@@ -108,13 +113,13 @@
 
 /* 日行灯和氛围灯不调亮度，直接给满 ——
  * 那些灯珠本身就比射灯暗得多，再降就基本看不见了。 */
-#define DUTY_DRL         100     /* 日行灯亮度 */
-#define DUTY_AMBIENT     100     /* 氛围灯亮度 */
+#define DUTY_DRL         100     /* 日行灯亮度（固定，不跟滑条） */
+#define DUTY_AMBIENT     100     /* 氛围灯亮度（固定，不跟滑条） */
 
 #define FW_VERSION       2       /* 固件协议版本，随状态一起上报 */
 
 HardwareSerial ASR(1);           /* 用 UART1，避开 USB CDC 日志 */
-Preferences    prefs;            /* NVS：掉电记忆亮度和通道掩码 */
+Preferences    prefs;            /* NVS：只记亮度 */
 
 /* ==========================================================
  * 二、BLE 协议定义（必须与手机 App 的 protocol.dart 完全一致）
@@ -133,8 +138,9 @@ Preferences    prefs;            /* NVS：掉电记忆亮度和通道掩码 */
 #define OP_MODE          0x10    /* [mode]            切换模式 */
 #define OP_CH_MASK       0x11    /* [hi, lo]          一次设置 16 位通道掩码 */
 #define OP_CH            0x12    /* [ch, on]          单个通道开关 */
-#define OP_GROUP         0x13    /* [groupId, on]     整组开关（该组 3 个功能一起） */
-#define OP_BRIGHT        0x14    /* [duty 0~100]      白光模式的亮度 */
+/* 0x13 原来是 OP_GROUP，现在整组开关由手机算好整张掩码走 OP_CH_MASK 下发，
+   省得"整组怎么算"这条规则在固件和 App 各写一遍、哪天改歪了对不上 */
+#define OP_BRIGHT        0x14    /* [duty 0~100]      射灯白光的亮度 */
 #define OP_QUERY         0x15    /* []                请求上报当前状态 */
 
 /* 设备 -> App（Notify） */
@@ -144,11 +150,11 @@ Preferences    prefs;            /* NVS：掉电记忆亮度和通道掩码 */
 
 /* 模式编号。必须和 App 的 LightMode 一致。 */
 enum SysMode {
-  MODE_OFF     = 0,   /* 关灯：全灭，上电默认 */
-  MODE_WHITE   = 1,   /* 白光：射灯白，按 manualDuty 常亮 */
-  MODE_DRL     = 2,   /* 日行灯：只亮日行灯那一路 */
-  MODE_AMBIENT = 3,   /* 氛围灯：只亮外圈黄光那一路 */
-  MODE_FLASH   = 4,   /* 爆闪：射灯白按节奏表闪，无视掩码 */
+  MODE_OFF     = 0,   /* 关灯：盖全灭 */
+  MODE_WHITE   = 1,   /* 白光：盖 4 组射灯白 */
+  MODE_DRL     = 2,   /* 日行灯：盖 4 组日行灯 */
+  MODE_AMBIENT = 3,   /* 氛围灯：盖 4 组氛围灯 */
+  MODE_FLASH   = 4,   /* 爆闪：盖 4 组射灯白，并让射灯那一路按节奏闪 */
   MODE_MAX
 };
 
@@ -249,13 +255,15 @@ static const FlashStep flashPattern[] = {
 };
 #define FLASH_STEPS (sizeof(flashPattern) / sizeof(flashPattern[0]))
 
-/* 上电默认关灯 —— 车子点火不能自己亮起来。模式不做掉电记忆。 */
+/* 上电默认关灯 —— 车子点火不能自己亮起来。
+   关灯的图章就是全灭，所以 chMask 开机也是 0。 */
 static SysMode  sysMode    = MODE_OFF;
-static uint16_t chMask     = CH_MASK_ALL;      /* 通道掩码，bit N = CH N */
-static uint8_t  manualDuty = 100;              /* 白光模式的亮度 */
+static uint16_t chMask     = 0;                /* bit N = CH N 现在亮不亮 */
+static uint8_t  manualDuty = 100;              /* 射灯白光的亮度 */
 
-/* 三个功能各自渐变中的实际亮度 */
-static float curFn[FN_COUNT] = { 0.0f, 0.0f, 0.0f };
+/* 每一路各自渐变中的实际亮度。
+   必须按【通道】记而不是按功能记 —— 同一个功能的 4 组现在可以一开一关。 */
+static float curCh[CH_TOTAL] = { 0 };
 
 static uint32_t flashIdx = 0, flashMs = 0, logMs = 0;
 static const char *reason = "Boot";
@@ -264,32 +272,51 @@ static const char *reason = "Boot";
 static bool     statusDirty = true;
 static uint32_t statusMs    = 0;
 
-/* 一组灯在掩码里占的 3 个位（第 4 位是空通道，不置位） */
-static inline uint16_t groupBits(uint8_t g) {
-  return (uint16_t)0x0007 << (g * CH_PER_GROUP);
+/* 某个模式的【图章】：切到这个模式时往 12 路上盖的那张掩码。
+ * 盖完模式就不管了 —— 之后 chMask 由用户那 12 个开关说了算。 */
+static uint16_t modePattern(SysMode m) {
+  uint8_t fn;
+  switch (m) {
+    case MODE_WHITE:
+    case MODE_FLASH:   fn = FN_SPOT; break;
+    case MODE_DRL:     fn = FN_DRL;  break;
+    case MODE_AMBIENT: fn = FN_AMB;  break;
+    default:           return 0;              /* MODE_OFF：全灭 */
+  }
+  uint16_t pat = 0;
+  for (uint8_t g = 0; g < GROUP_COUNT; g++) pat |= (uint16_t)1 << CH_OF(g, fn);
+  return pat;
+}
+
+/* 这一路该出多少亮度 —— 按【功能】定，跟当前是什么模式无关。
+ * 唯一的例外是射灯那一路在爆闪模式下要跟节奏表走。 */
+static int channelDuty(uint8_t fn, int flashDuty) {
+  switch (fn) {
+    case FN_SPOT: return (sysMode == MODE_FLASH) ? flashDuty : manualDuty;
+    case FN_DRL:  return DUTY_DRL;
+    case FN_AMB:  return DUTY_AMBIENT;
+    default:      return 0;
+  }
 }
 
 /* ==========================================================
  * 五、NVS 掉电记忆
  *
- * 只记亮度和通道掩码 —— 模式故意不记，点火后一律是关着的。
+ * 只记亮度 —— 模式和通道故意不记，点火后一律是关着的。
  * 只在值真的变了的时候写，NVS 有擦写寿命，别每个 tick 都写。
  * ========================================================== */
 static void saveSettings() {
-  prefs.putUShort("chmask", chMask);
   prefs.putUChar("duty", manualDuty);
-  Serial.printf("[NVS] 已保存 mask=0x%04X duty=%u\n", chMask, manualDuty);
+  Serial.printf("[NVS] 已保存 duty=%u\n", manualDuty);
 }
 
 static void loadSettings() {
   prefs.begin("spotlight", false);
-  /* 出厂默认：12 路全开、100% */
-  chMask     = prefs.getUShort("chmask", CH_MASK_ALL);
-  chMask    &= CH_MASK_ALL;                 /* 空通道那几位强制清掉 */
+  /* 只恢复亮度。模式开机固定为关灯，关灯的图章就是全灭，
+     所以通道状态没什么可恢复的 —— 存了也用不上。 */
   manualDuty = prefs.getUChar("duty", 100);
   if (manualDuty > 100) manualDuty = 100;
-  Serial.printf("[NVS] 已恢复 mask=0x%04X duty=%u（模式不记忆，开机为关灯）\n",
-                chMask, manualDuty);
+  Serial.printf("[NVS] 已恢复 duty=%u（开机为关灯，12 路全灭）\n", manualDuty);
 }
 
 /* ==========================================================
@@ -334,7 +361,7 @@ static uint32_t saveTimer   = 0;
  *
  * 存盘不能立刻做：拖亮度滑条会连发几十条指令，条条都写 NVS 是在白白
  * 消耗闪存擦写寿命。这里只排队，等状态稳定 2 秒再真正写一次。
- * 模式变化只上报不存盘 —— 模式本来就不记忆。 */
+ * 只有亮度需要 persist=true，模式和通道都不记忆。 */
 static void markDirty(bool persist = true) {
   statusDirty = true;
   if (persist) {
@@ -392,15 +419,6 @@ static void handlePacket(uint8_t op, const uint8_t *data, size_t len) {
       if (ch >= CH_TOTAL) return;
       uint16_t bit = (uint16_t)1 << ch;
       applyMask(data[1] ? (chMask | bit) : (chMask & ~bit), "单通道");
-      break;
-    }
-    case OP_GROUP: {
-      /* 整组开关 = 这组的 3 个功能一起切 */
-      if (len < 2) return;
-      uint8_t g = data[0];
-      if (g >= GROUP_COUNT) return;
-      uint16_t bits = groupBits(g);
-      applyMask(data[1] ? (chMask | bits) : (chMask & ~bits), "灯组");
       break;
     }
     case OP_BRIGHT: {
@@ -510,12 +528,13 @@ static bool asrReadCmd(char *out, size_t size) {
  *                否则用户说了句"自动"灯却变成白光，比没反应更让人摸不着头脑。
  */
 static void handleVoice(const char *cmd) {
+  /* 语音切模式和手机切模式是同一件事：连图章一起盖，
+     所以喊一声"开灯"能把详情页里手动改花的通道复位回来 */
   if (strstr(cmd, "WHT")) {
     sysMode = MODE_WHITE;    Serial.println(">> 语音: 白光");
   } else if (strstr(cmd, "YEL") || strstr(cmd, "RED")) {
     sysMode = MODE_AMBIENT;  Serial.println(">> 语音: 氛围灯");
   } else if (strstr(cmd, "BLBL") || strstr(cmd, "BL")) {
-    if (sysMode != MODE_FLASH) { flashIdx = 0; flashMs = 0; }
     sysMode = MODE_FLASH;    Serial.println(">> 语音: 爆闪");
   } else if (strstr(cmd, "AUTO")) {
     Serial.println(">> 语音: 自动 —— 该模式已取消，忽略");
@@ -532,7 +551,9 @@ static void handleVoice(const char *cmd) {
     Serial.println();
     return;
   }
-  markDirty(false);                              /* 模式不存盘 */
+  if (sysMode == MODE_FLASH) { flashIdx = 0; flashMs = 0; }
+  chMask = modePattern(sysMode);
+  markDirty(false);                              /* 模式和通道都不存盘 */
 }
 
 /* ==========================================================
@@ -542,7 +563,7 @@ void setup() {
   Serial.begin(115200);                          /* USB CDC 日志 */
   ASR.begin(ASR_BAUD, SERIAL_8N1, PIN_ASR_RX, PIN_ASR_TX);
 
-  loadSettings();                                /* 恢复亮度和掩码（模式不恢复） */
+  loadSettings();                                /* 只恢复亮度，模式和通道不恢复 */
   pca9685Init(PCA9685_FREQ_HZ);
   bleInit();
 
@@ -558,73 +579,45 @@ void loop() {
     handleVoice(cmd);
   }
 
-  /* ---------- 2. 按模式算出三个功能各自的目标亮度 ----------
-     模式是互斥的：同一时刻只有一个功能出光，其余两个恒 0。
-     「黄光不爆闪」就是靠这个表保证的 —— 爆闪那一行只填 FN_SPOT。 */
-  int  fnDuty[FN_COUNT] = { 0, 0, 0 };
-  bool hardSwitch = false;      /* 爆闪要硬切，不能走渐变 */
-  bool ignoreMask = false;      /* 爆闪无视掩码，4 组一起闪 */
-
-  switch (sysMode) {
-    case MODE_OFF:
-      reason = "Off";
-      break;
-
-    case MODE_WHITE:
-      fnDuty[FN_SPOT] = manualDuty;
-      reason = "White";
-      break;
-
-    case MODE_DRL:
-      fnDuty[FN_DRL] = DUTY_DRL;
-      reason = "DRL";
-      break;
-
-    case MODE_AMBIENT:
-      fnDuty[FN_AMB] = DUTY_AMBIENT;
-      reason = "Ambient";
-      break;
-
-    case MODE_FLASH: {
-      flashMs += TICK_MS;
-      if (flashMs >= flashPattern[flashIdx].ms) {
-        flashMs  = 0;
-        flashIdx = (flashIdx + 1) % FLASH_STEPS;
-      }
-      fnDuty[FN_SPOT] = flashPattern[flashIdx].duty;
-      hardSwitch = true;
-      ignoreMask = true;        /* 警示灯要全车都看得见 */
-      reason = "Flash";
-      break;
+  /* ---------- 2. 爆闪节奏 ----------
+     模式现在只剩这一个作用：射灯那一路要不要按节奏闪。
+     亮哪几路完全由 chMask 说了算，模式只在【切过去那一刻】盖过一次图章。 */
+  int flashDuty = 0;
+  if (sysMode == MODE_FLASH) {
+    flashMs += TICK_MS;
+    if (flashMs >= flashPattern[flashIdx].ms) {
+      flashMs  = 0;
+      flashIdx = (flashIdx + 1) % FLASH_STEPS;
     }
-
-    default:
-      break;
+    flashDuty = flashPattern[flashIdx].duty;
+    reason = "Flash";
+  } else {
+    reason = (sysMode == MODE_OFF) ? "Off" : "Steady";
   }
 
-  /* ---------- 3. 渐变 ---------- */
-  for (uint8_t fn = 0; fn < FN_COUNT; fn++) {
-    float target = (float)fnDuty[fn];
-    if (hardSwitch) {
-      curFn[fn] = target;
-    } else {
-      curFn[fn] += (target - curFn[fn]) * SMOOTH_FACTOR;
-      if (fabsf(target - curFn[fn]) < 0.5f) curFn[fn] = target;
-    }
-  }
-
-  /* ---------- 4. 按通道掩码输出 ---------- */
+  /* ---------- 3. 逐路输出 ----------
+     一路亮不亮只看 chMask，亮多少只看它是哪个功能 ——
+     所以在白光模式下手动点一路氛围灯，它照样按氛围灯自己的亮度亮。 */
   for (uint8_t g = 0; g < GROUP_COUNT; g++) {
     for (uint8_t fn = 0; fn < FN_COUNT; fn++) {
-      uint8_t ch  = CH_OF(g, fn);
-      bool    on  = ignoreMask || (chMask & ((uint16_t)1 << ch));
-      pcaSetChannelCached(ch, on ? (int)(curFn[fn] + 0.5f) : 0);
+      uint8_t ch     = CH_OF(g, fn);
+      bool    on     = chMask & ((uint16_t)1 << ch);
+      float   target = on ? (float)channelDuty(fn, flashDuty) : 0.0f;
+
+      /* 爆闪要硬切，不能走渐变；其余一律渐变，切换时柔和些 */
+      if (on && fn == FN_SPOT && sysMode == MODE_FLASH) {
+        curCh[ch] = target;
+      } else {
+        curCh[ch] += (target - curCh[ch]) * SMOOTH_FACTOR;
+        if (fabsf(target - curCh[ch]) < 0.5f) curCh[ch] = target;
+      }
+      pcaSetChannelCached(ch, (int)(curCh[ch] + 0.5f));
     }
     /* 每组第 4 路没接线，主动压 0，不让它悬空 */
     pcaSetChannelCached(CH_OF(g, FN_COUNT), 0);
   }
 
-  /* ---------- 5. NVS 延迟落盘 ---------- */
+  /* ---------- 4. NVS 延迟落盘 ---------- */
   if (savePending) {
     saveTimer += TICK_MS;
     if (saveTimer >= 2000) {          /* 2 秒内没有新变化才写 */
@@ -634,7 +627,7 @@ void loop() {
     }
   }
 
-  /* ---------- 6. 状态上报 ---------- */
+  /* ---------- 5. 状态上报 ---------- */
   /* 有变化就报。爆闪时亮度每 50ms 就变一次，不能跟着报，
      所以只报"设置"层面的变化，不报闪烁的瞬时亮度。 */
   if (statusDirty) {
@@ -648,18 +641,22 @@ void loop() {
     notifyStatus();
   }
 
-  /* ---------- 7. 串口状态打印（每 1s） ---------- */
+  /* ---------- 6. 串口状态打印（每 1s） ---------- */
   logMs += TICK_MS;
   if (logMs >= 1000) {
     logMs = 0;
-    Serial.printf("Mode:%s Mask:0x%04X BLE:%s Notify:%lu | Spot:%d%% DRL:%d%% Amb:%d%%\n",
-                  reason,
-                  chMask,
+    /* 12 路的实际占空比按组打印，接线和调试时一眼对得上 */
+    Serial.printf("Mode:%u/%s Mask:0x%04X Duty:%u%% BLE:%s Notify:%lu |",
+                  (unsigned)sysMode, reason, chMask, manualDuty,
                   bleConnected ? "ON" : "--",
-                  (unsigned long)notifyCount,
-                  (int)(curFn[FN_SPOT] + 0.5f),
-                  (int)(curFn[FN_DRL]  + 0.5f),
-                  (int)(curFn[FN_AMB]  + 0.5f));
+                  (unsigned long)notifyCount);
+    for (uint8_t g = 0; g < GROUP_COUNT; g++) {
+      Serial.printf(" G%u[%d/%d/%d]", g,
+                    (int)(curCh[CH_OF(g, FN_SPOT)] + 0.5f),
+                    (int)(curCh[CH_OF(g, FN_DRL)]  + 0.5f),
+                    (int)(curCh[CH_OF(g, FN_AMB)]  + 0.5f));
+    }
+    Serial.println();
   }
 
   delay(TICK_MS);

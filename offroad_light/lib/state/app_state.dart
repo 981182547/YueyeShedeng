@@ -1,10 +1,11 @@
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../ble/ble_manager.dart';
 import '../ble/protocol.dart';
 import '../i18n/strings.dart';
 import '../models/lamp.dart';
+import '../theme.dart';
 
 enum ConnState { disconnected, connecting, connected }
 
@@ -56,11 +57,14 @@ class AppState extends ChangeNotifier {
   /// 当前模式。固件上电默认是关灯(车子点火不能自己亮),这里跟着默认关。
   int mode = LightMode.off;
 
-  /// 16 位通道掩码,第 N 位 = CH N 的总开关。
+  /// 16 位通道掩码,第 N 位 = CH N【现在亮不亮】。
+  /// 它没有别的含义 —— 不是"允许亮",就是"亮着"。
   /// 每组第 4 位(CH3/7/11/15)恒为 0 —— 那一路没接线。
-  int chMask = kChMaskAll;
+  ///
+  /// 开机默认关灯,关灯的图章就是全灭,所以初值是 0。
+  int chMask = 0;
 
-  /// 白光模式的亮度。日行灯和氛围灯是固定满亮,不受它影响。
+  /// 射灯白光那一路的亮度。日行灯和氛围灯是固定满亮,不受它影响。
   int brightness = 100;
 
   /// 是否收到过设备的状态上报。没连上时界面显示的只是上次的记忆值。
@@ -78,13 +82,15 @@ class AppState extends ChangeNotifier {
 
   bool get isConnected => conn == ConnState.connected;
 
-  bool get isOff => mode == LightMode.off;
-
-  /// 当前模式实际驱动的功能通道(关灯时为 null)
+  /// 当前模式盖的是哪个功能通道(关灯时为 null)
   int? get activeFn => activeFnOf(mode);
 
-  /// 车图上该画成黄色还是白色
-  bool get isAmbient => isAmbientMode(mode);
+  /// 一路灯都没亮
+  bool get allDark => chMask == 0;
+
+  /// 用户在分路控制页动过手,现在的通道状态已经和模式的图章不一样了。
+  /// 界面上要标出来,否则"选着白光却亮着黄的"会让人以为是 bug。
+  bool get customized => chMask != modePattern(mode);
 
   // ---- 上次连接的设备,下次打开自动连回去 ----
   String? get savedDeviceId => prefs.getString('device_id');
@@ -127,65 +133,76 @@ class AppState extends ChangeNotifier {
   /// 某一路通道的总开关是不是开着
   bool isChOn(int ch) => (chMask & (1 << ch)) != 0;
 
-  /// 一组的 3 路全开才算这组"开着"。半开状态在界面上单独显示。
-  bool isGroupOn(LampGroup g) =>
-      LampFn.all.every((fn) => isChOn(chOf(g.id, fn)));
+  /// 这一组某一路亮不亮
+  bool isGroupFnOn(int groupId, int fn) => isChOn(chOf(groupId, fn));
 
-  bool isGroupPartial(LampGroup g) {
-    final on = LampFn.all.where((fn) => isChOn(chOf(g.id, fn))).length;
-    return on > 0 && on < LampFn.all.length;
-  }
+  /// 这一组有没有任意一路亮着
+  bool isGroupLit(int groupId) =>
+      LampFn.all.any((fn) => isChOn(chOf(groupId, fn)));
 
-  /// 开着的组数(只要有一路开着就算)
-  int get onGroupCount => kGroups
-      .where((g) => LampFn.all.any((fn) => isChOn(chOf(g.id, fn))))
-      .length;
+  /// 亮着的组数(只要有一路亮就算)
+  int get onGroupCount =>
+      kGroups.where((g) => isGroupLit(g.id)).length;
 
-  /// 这一组这会儿到底亮不亮 —— 车图上只有这种才画成发光的。
+  /// 这一路这会儿出多少亮度 0~100 —— 按【功能】算,跟当前什么模式无关。
   ///
-  /// 要同时满足:有模式在出光,而且【当前模式那一路】的掩码位是开的。
-  /// 唯一例外是爆闪:固件那边无视掩码 4 组一起闪,界面得跟着一起闪,
-  /// 否则会出现"手机上某组不闪、车上却在闪"的对不上。
-  bool isGroupLit(int groupId) {
-    if (mode == LightMode.off) return false;
-    if (mode == LightMode.flash) return true; // 爆闪无视掩码,全车都闪
-    final fn = activeFn;
-    if (fn == null) return false;
-    return isChOn(chOf(groupId, fn));
-  }
-
-  /// 这一刻灯的实际亮度 0~100,车图按它决定光点画多亮。
-  ///
-  /// 只有白光模式跟滑条走;日行灯和氛围灯是固件定死的满亮,爆闪走节奏表。
-  int get effectiveDuty => switch (mode) {
-        LightMode.off => 0,
-        LightMode.white => brightness,
-        LightMode.drl => FixedDuty.drl,
-        LightMode.ambient => FixedDuty.ambient,
-        LightMode.flash => FixedDuty.flash,
+  /// 只有射灯那一路跟滑条走;日行灯和氛围灯是固件定死的满亮。
+  /// 所以在白光模式下手动点一路氛围灯,它照样按氛围灯自己的亮度亮。
+  int fnDuty(int fn) => switch (fn) {
+        LampFn.spot => brightness,
+        LampFn.drl => FixedDuty.drl,
+        LampFn.ambient => FixedDuty.ambient,
         _ => 0,
       };
 
-  /// 车图上画多亮 0~1。
+  /// 车图上这一路画多亮 0~1。
   ///
   /// 占空比再乘一个【显示折扣】:日行灯和氛围灯虽然也给满占空比,
   /// 但那是另外一串灯珠,物理上就比射灯暗一大截,画面得跟车上看到的一致。
-  double get lightIntensity =>
-      ((effectiveDuty / 100) * displayScaleOf(mode)).clamp(0.0, 1.0);
+  double fnIntensity(int fn) =>
+      ((fnDuty(fn) / 100) * fnDisplayScale(fn)).clamp(0.0, 1.0);
 
-  /// 亮度滑条只在白光模式下有意义,其余模式的亮度是固件定死的
-  bool get brightnessAdjustable => mode == LightMode.white;
+  /// 亮度滑条只管射灯那一路。没有一路射灯亮着时就没什么可调的,置灰。
+  bool get brightnessAdjustable =>
+      kGroups.any((g) => isChOn(chOf(g.id, LampFn.spot)));
+
+  /// 这一组该染成什么色 —— 看它【实际亮着的是哪一路】,不看模式。
+  ///
+  /// 分路控制页是最高权限,完全可能出现"白光模式下某组只留了氛围灯"。
+  /// 白光优先:射灯或日行灯亮着就是白的,只剩氛围灯才是黄的。
+  Color groupLitColor(int groupId) {
+    if (isGroupFnOn(groupId, LampFn.spot) ||
+        isGroupFnOn(groupId, LampFn.drl)) {
+      return AppColors.lightWhite;
+    }
+    if (isGroupFnOn(groupId, LampFn.ambient)) return AppColors.lightYellow;
+    return AppColors.lightWhite; // 全灭,取个默认值,反正不会画出来
+  }
+
+  /// 整车这会儿是什么色,顶上那个状态点用它
+  Color get litColor {
+    final anyWhite = kGroups.any((g) =>
+        isGroupFnOn(g.id, LampFn.spot) || isGroupFnOn(g.id, LampFn.drl));
+    if (anyWhite) return AppColors.lightWhite;
+    final anyAmber = kGroups.any((g) => isGroupFnOn(g.id, LampFn.ambient));
+    return anyAmber ? AppColors.lightYellow : AppColors.lightWhite;
+  }
 
   // ---- 操作(乐观更新 + 下发) ----
 
-  /// 切模式。掩码不动 —— 模式和掩码是两个独立维度。
+  /// 切模式 = 往 12 路上盖一张图章,盖完模式就不管了。
+  ///
+  /// 就算已经是这个模式也照盖一次 —— 用户在分路控制页手动改花了之后,
+  /// 再点一下当前模式就能一键复位,这是唯一的复位入口。
   void setMode(int m) {
     mode = m;
+    chMask = modePattern(m);
     notifyListeners();
     ble?.send(Protocol.mode(m));
   }
 
-  /// 单路通道开关(详情页那 12 个开关用)
+  /// 单路通道开关(分路控制页那 12 个开关用)。
+  /// 这是最高权限:直接开关这一路的输出,不受当前模式约束。
   void toggleCh(int ch) {
     final on = !isChOn(ch);
     chMask = (on ? (chMask | (1 << ch)) : (chMask & ~(1 << ch))) & kChMaskAll;
@@ -193,14 +210,23 @@ class AppState extends ChangeNotifier {
     ble?.send(Protocol.channel(ch, on));
   }
 
-  /// 整组开关:一次切这组的 3 路。
-  /// 全开就关掉;否则(全灭或半开)一律打开,点一下就有反应。
+  /// 整组开关(主页车图和组卡片用)。
+  ///
+  /// 这组有任意一路亮着 -> 整组熄掉;
+  /// 一路都不亮       -> 点亮【当前模式那一路】,而不是三路全开 ——
+  ///                     白光模式下点一组,要的是这组的射灯,不是连日行灯一起。
+  ///
+  /// 算好整张掩码再下发,不走单独的"整组"指令 ——
+  /// 免得这条规则在固件和 App 各写一遍,哪天改歪了两边对不上。
   void toggleGroup(LampGroup g) {
-    final on = !isGroupOn(g);
     final bits = groupBits(g.id);
-    chMask = (on ? (chMask | bits) : (chMask & ~bits)) & kChMaskAll;
-    notifyListeners();
-    ble?.send(Protocol.group(g.id, on));
+    if (isGroupLit(g.id)) {
+      setChMask(chMask & ~bits);
+    } else {
+      final fn = activeFn;
+      // 关灯模式下没有"当前那一路",默认给射灯 —— 点一下总得有反应
+      setChMask(chMask | (1 << chOf(g.id, fn ?? LampFn.spot)));
+    }
   }
 
   void setChMask(int mask) {
@@ -235,12 +261,15 @@ class AppState extends ChangeNotifier {
   /// 拖动结束时调用:确保最终值一定发到设备
   void commitBrightness() => setBrightness(brightness, commit: true);
 
-  /// 总开关:关灯 <-> 回到关灯前的那个模式
+  /// 总开关:全灭 <-> 回到熄灯前的那个模式。
+  ///
+  /// 判据是【有没有灯亮着】而不是模式是不是关灯——
+  /// 分路控制页可以在关灯模式下手动点亮某一路,那时候按一下也该能全灭。
   void togglePower() {
-    if (mode == LightMode.off) {
+    if (allDark) {
       setMode(_lastLitMode);
     } else {
-      _lastLitMode = mode;
+      if (mode != LightMode.off) _lastLitMode = mode;
       setMode(LightMode.off);
     }
   }

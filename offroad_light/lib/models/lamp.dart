@@ -191,22 +191,28 @@ String fnName(S s, int fn) => switch (fn) {
     };
 
 /// ══════════════════════════════════════════════════════════
-/// 模式 —— 选了哪个模式就亮哪一路灯,互斥
+/// 模式 = 一个【预设图章】
 ///
-/// 没有独立的"颜色"维度了:白光就是射灯那一路,氛围灯就是外圈黄光那一路。
-/// 【黄光不爆闪】是结构上保证的 —— 爆闪只驱动射灯白光,氛围灯通道恒 0。
+/// 切到某个模式的那一刻,会往 12 路通道上盖一张掩码,盖完模式就不管了 ——
+/// 之后亮哪几路完全由 chMask 说了算,分路控制页那 12 个开关是最高权限。
+/// 想复位就再点一次模式按钮,图章会重新盖一遍。
+///
+/// 模式剩下的唯一作用:射灯那一路要不要按节奏闪。
+/// 所以【黄光不爆闪】是结构上保证的 —— 爆闪只作用在射灯那一路,
+/// 就算在爆闪模式下手动点亮氛围灯,它也是常亮不闪。
+///
 /// 编号必须和固件的 enum SysMode 一致。
 /// ══════════════════════════════════════════════════════════
 
 class LightMode {
-  static const off = 0; // 关灯(上电默认)
-  static const white = 1; // 白光:射灯白,亮度跟滑条
-  static const drl = 2; // 日行灯
-  static const ambient = 3; // 氛围灯:外圈那圈黄光
-  static const flash = 4; // 爆闪:射灯白按节奏闪,无视掩码
+  static const off = 0; // 关灯:盖全灭
+  static const white = 1; // 白光:盖 4 组射灯白
+  static const drl = 2; // 日行灯:盖 4 组日行灯
+  static const ambient = 3; // 氛围灯:盖 4 组氛围灯
+  static const flash = 4; // 爆闪:盖 4 组射灯白,并让射灯那一路闪
 }
 
-/// 每个模式实际驱动的是哪个功能通道。关灯时没有。
+/// 这个模式盖的是哪个功能。关灯时没有。
 int? activeFnOf(int mode) => switch (mode) {
       LightMode.white => LampFn.spot,
       LightMode.drl => LampFn.drl,
@@ -215,34 +221,41 @@ int? activeFnOf(int mode) => switch (mode) {
       _ => null,
     };
 
-/// 固件里定死的几个亮度档(对应 .ino 里的 DUTY_*)。
+/// 切到这个模式时盖在 12 路上的那张掩码 —— 必须和固件的 modePattern() 一致。
+int modePattern(int mode) {
+  final fn = activeFnOf(mode);
+  if (fn == null) return 0; // 关灯:全灭
+  var pat = 0;
+  for (var g = 0; g < kGroupCount; g++) {
+    pat |= 1 << chOf(g, fn);
+  }
+  return pat;
+}
+
+/// 固件里定死的两个亮度档(对应 .ino 里的 DUTY_*)。
 ///
-/// 只有白光模式用得上滑条:日行灯和氛围灯是固定满亮 —— 那些灯珠本身
-/// 就比射灯暗得多,再降就基本看不见了。改了固件的 DUTY_* 记得同步这里。
+/// 亮度是按【功能】定的,跟当前什么模式无关:只有射灯那一路跟滑条走,
+/// 日行灯和氛围灯固定满亮 —— 那些灯珠本身就比射灯暗得多,再降就看不见了。
+/// 改了固件的 DUTY_* 记得同步这里。
 class FixedDuty {
   static const drl = 100; // DUTY_DRL
   static const ambient = 100; // DUTY_AMBIENT
-  static const flash = 100;
 }
 
-/// 车图上这个模式该画多亮 —— 和 PWM 占空比是两回事。
+/// 车图上这一路该画多亮 —— 和 PWM 占空比是两回事。
 ///
-/// 日行灯和氛围灯虽然都给满占空比,但那是【另外一串灯珠】,物理上就比
+/// 日行灯和氛围灯虽然也给满占空比,但那是【另外一串灯珠】,物理上就比
 /// 射灯暗一大截。画面要跟车上看到的一致,所以这里单独打个折。
-double displayScaleOf(int mode) => switch (mode) {
-      LightMode.white => 1.00,
-      LightMode.flash => 1.00,
-      LightMode.drl => 0.45, // 日行灯:白色,但明显暗一截
-      LightMode.ambient => 0.55, // 氛围灯:外圈一圈黄,弱亮
+double fnDisplayScale(int fn) => switch (fn) {
+      LampFn.spot => 1.00,
+      LampFn.drl => 0.45, // 日行灯:白色,但明显暗一截
+      LampFn.ambient => 0.55, // 氛围灯:外圈一圈黄,弱亮
       _ => 0.0,
     };
 
-/// 这个模式画出来是什么颜色
-bool isAmbientMode(int mode) => mode == LightMode.ambient;
-
-/// 当前模式下灯是什么色 —— 只有氛围灯是黄的,射灯和日行灯都是白的
-Color lightColorOf(int mode) =>
-    isAmbientMode(mode) ? AppColors.lightYellow : AppColors.lightWhite;
+/// 这一路灯本身是什么颜色 —— 只有氛围灯是黄的
+Color fnColor(int fn) =>
+    fn == LampFn.ambient ? AppColors.lightYellow : AppColors.lightWhite;
 
 class ModeInfo {
   final int id;

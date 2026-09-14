@@ -5,13 +5,13 @@ import '../state/app_state.dart';
 import '../theme.dart';
 import '../widgets/car_view.dart';
 
-/// 分路控制页:12 路 PWM 一路一路独立开关。
+/// 分路控制页:12 路 PWM 一路一路直接开关。
 ///
-/// 主页那 4 个组开关是"一次切一组的 3 路",这一页是把这 3 路拆开来单独管 ——
-/// 比如想让前包围只出氛围灯、别的组正常,就在这里把前包围的射灯那一路关掉。
+/// 这一页是【最高权限】—— 开关就是输出,不受当前模式约束。
+/// 想要"前包围出白光、车顶出氛围灯"这种模式给不了的组合,就在这里点。
 ///
-/// 关掉的通道在【对应模式下】不亮:关了氛围灯那一路,切到氛围灯模式时这组就是暗的,
-/// 但切回白光模式照样亮。爆闪是唯一的例外,固件那边无视掩码四组一起闪。
+/// 模式只是个预设图章:切模式的那一刻会把这 12 路按该模式重设一遍,
+/// 所以改花了想复位,回主页点一下模式按钮就行。
 class LampsScreen extends StatelessWidget {
   final AppState state;
   const LampsScreen({super.key, required this.state});
@@ -63,20 +63,21 @@ class LampsScreen extends StatelessWidget {
                 onTapGroup: (g) => state.toggleGroup(groupById(g)),
               ),
 
-              // 爆闪无视掩码,这点必须写清楚,否则用户会以为开关坏了
-              if (state.mode == LightMode.flash)
+              // 改花了就说一声怎么恢复,否则用户找不到复位的入口
+              if (state.customized)
                 Padding(
                   padding: const EdgeInsets.only(top: 12),
                   child: Row(
                     children: [
-                      const Icon(Icons.info_outline,
+                      const Icon(Icons.tune,
                           size: 14, color: AppColors.textLo),
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
-                          s.flashIgnoresMask,
+                          s.customizedHint(modeName(s, state.mode)),
                           style: const TextStyle(
-                              fontSize: 11.5, color: AppColors.textLo),
+                              fontSize: 11.5, height: 1.4,
+                              color: AppColors.textLo),
                         ),
                       ),
                     ],
@@ -116,10 +117,6 @@ Widget _lightSwitch({
     onChanged: (_) => onTap(),
   );
 }
-
-/// 这一路灯本身是什么颜色 —— 只有氛围灯是黄的
-Color _fnColor(int fn) =>
-    fn == LampFn.ambient ? AppColors.lightYellow : AppColors.lightWhite;
 
 IconData _fnIcon(int fn) => switch (fn) {
       LampFn.spot => Icons.lightbulb_circle,
@@ -170,12 +167,11 @@ class _GroupSection extends StatelessWidget {
                   ],
                 ),
                 const Spacer(),
-                Text(
-                  state.isGroupPartial(group) ? s.partial : '',
-                  style: const TextStyle(fontSize: 11, color: AppColors.textLo),
-                ),
                 _lightSwitch(
-                  value: state.isGroupOn(group),
+                  // 整组开关现在是"这组有没有亮着",不是"三路全开"——
+                  // 白光模式下点亮一组只会开射灯那一路,要求三路全开才算开
+                  // 的话,这个开关永远是灰的。
+                  value: state.isGroupLit(group.id),
                   color: AppColors.lightWhite,
                   onTap: () => state.toggleGroup(group),
                 ),
@@ -215,11 +211,9 @@ class _ChannelTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = state.s;
     final ch = chOf(group.id, fn);
+    // 开关就是输出:开着 = 这一路正在亮,没有"开着但被模式挡住"这回事
     final on = state.isChOn(ch);
-    final color = _fnColor(fn);
-
-    // 这一路正不正在出光:当前模式用的就是它,而且它的开关是开着的
-    final active = state.activeFn == fn && on;
+    final color = fnColor(fn);
 
     return Column(
       children: [
@@ -232,13 +226,13 @@ class _ChannelTile extends StatelessWidget {
             alignment: Alignment.center,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: active
+              color: on
                   ? color.withValues(alpha: 0.9)
                   : AppColors.surfaceHi,
               border: Border.all(
-                color: active ? color : AppColors.border,
+                color: on ? color : AppColors.border,
               ),
-              boxShadow: active
+              boxShadow: on
                   ? [
                       BoxShadow(
                         color: color.withValues(alpha: 0.5),
@@ -251,7 +245,7 @@ class _ChannelTile extends StatelessWidget {
             child: Icon(
               _fnIcon(fn),
               size: 16,
-              color: active ? Colors.black87 : AppColors.textLo,
+              color: on ? Colors.black87 : AppColors.textLo,
             ),
           ),
           title: Row(
@@ -263,8 +257,8 @@ class _ChannelTile extends StatelessWidget {
                   color: on ? AppColors.textHi : AppColors.textLo,
                 ),
               ),
-              // 一眼看出这会儿在用哪一路,不用回主页对模式
-              if (active) ...[
+              // 一眼看出这会儿哪几路真的亮着
+              if (on) ...[
                 const SizedBox(width: 8),
                 Container(
                   padding:
@@ -274,7 +268,7 @@ class _ChannelTile extends StatelessWidget {
                     borderRadius: BorderRadius.circular(5),
                   ),
                   child: Text(
-                    s.activeNow,
+                    s.litNow,
                     style: TextStyle(fontSize: 10, color: color),
                   ),
                 ),

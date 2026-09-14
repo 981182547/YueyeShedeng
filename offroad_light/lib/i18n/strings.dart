@@ -21,7 +21,6 @@ class S {
   String get appTitle => 'SPOTLIGHT'; // 品牌名，两种语言都不翻
   String get on => zh ? '开' : 'On';
   String get off => zh ? '关' : 'Off';
-  String get partial => zh ? '半开' : 'Partial';
   String get allOn => zh ? '全开' : 'All On';
   String get allOff => zh ? '全关' : 'All Off';
   String get cancel => zh ? '取消' : 'Cancel';
@@ -79,14 +78,14 @@ class S {
 
   // ── 分路控制页 ────────────────────────────────────
   String get channelHint => zh
-      ? '12 路独立开关。每组灯有射灯白光、日行灯、氛围灯三路，关掉的那一路在对应模式下就不亮。'
-      : '12 independent channels. Each group has a spotlight, a DRL and an ambient ring; a channel switched off stays dark in its mode.';
-  String get flashIgnoresMask => zh
-      ? '爆闪模式无视这些开关，四组射灯一起闪'
-      : 'Strobe ignores these switches — all four spotlight groups flash together';
+      ? '12 路直接开关，想点亮哪一路就点哪一路，不受当前模式限制。\n切换模式会按该模式重新设置这 12 路。'
+      : 'Direct control over all 12 channels — switch on any of them, regardless of the current mode. Changing mode resets all 12.';
   String channelNo(int ch) => zh ? '通道 CH$ch' : 'Channel CH$ch';
-  String get activeNow => zh ? '当前模式在用' : 'Active now';
-  String get allGroupsFlash => zh ? '四组全闪' : 'All 4 flashing';
+  String get litNow => zh ? '亮着' : 'On';
+  String get customized => zh ? '已自定义' : 'Custom';
+  String customizedHint(String mode) => zh
+      ? '这 12 路已经手动改过，和「$mode」的默认不一样了。点一下下面的模式按钮就能恢复。'
+      : 'These 12 channels were changed by hand and no longer match "$mode". Tap a mode button below to reset.';
 
   // ── 车图 ──────────────────────────────────────────
   String get noCarImage => zh ? '还没有车辆图片' : 'No vehicle image yet';
