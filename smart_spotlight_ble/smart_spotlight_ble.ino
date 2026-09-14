@@ -392,7 +392,7 @@ static void applyMask(uint16_t next, const char *who) {
   if (next == chMask) return;
   chMask = next;
   Serial.printf("[BLE] %s -> 掩码 0x%04X\n", who, chMask);
-  markDirty();
+  markDirty(false);                    /* 通道状态不存盘，只有亮度才进 NVS */
 }
 
 /* 解析 App 发来的封包。
@@ -403,12 +403,14 @@ static void handlePacket(uint8_t op, const uint8_t *data, size_t len) {
       if (len < 1) return;
       uint8_t m = data[0];
       if (m >= MODE_MAX) return;
-      if (sysMode != (SysMode)m) {
-        sysMode = (SysMode)m;
-        if (sysMode == MODE_FLASH) { flashIdx = 0; flashMs = 0; }
-        Serial.printf("[BLE] 切换模式: %u\n", (unsigned)m);
-        markDirty(false);              /* 模式不存盘 */
-      }
+      /* 就算已经是这个模式也照盖一次图章 ——
+         用户在分路控制页手动改花了之后，再点一下当前模式就能一键复位。
+         所以这里【不能】加 if (sysMode != m) 的判断。 */
+      sysMode = (SysMode)m;
+      if (sysMode == MODE_FLASH) { flashIdx = 0; flashMs = 0; }
+      chMask  = modePattern(sysMode);
+      Serial.printf("[BLE] 切换模式: %u -> 掩码 0x%04X\n", (unsigned)m, chMask);
+      markDirty(false);                /* 模式和通道都不存盘 */
       break;
     }
     case OP_CH_MASK: {
