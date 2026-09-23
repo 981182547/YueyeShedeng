@@ -1,26 +1,22 @@
 # ============================================================
-# 云端构建 Android APK
+# 云端构建 2.0（8 组）App：Android APK + 未签名 iOS IPA
 #
-# Flutter 工程在子目录 offroad_light/，所以下面用 working-directory 指过去；
-# 但 .github/workflows/ 必须放在仓库根目录，GitHub Actions 只认这个位置。
+# 和 build.yml 是同一套流程，只是工程目录换成 offroad_light_8lutebieban/，
+# 产物名前面加了 2，免得和 4 组版的包混在一起。
 #
-# 本地那套 Flutter 太旧(3.29.2)，装不上新版依赖，所以构建走云端最新 stable。
-#
-# 用法：
-#   1. 推送到 main 分支自动触发；
-#   2. 也可在 Actions 页面 → 选本工作流 → Run workflow 手动触发。
-#   3. 跑完在该次运行页面底部 Artifacts 下载 SPOTLIGHT-android，直接装手机。
+# 只有改到 2.0 的 App 目录（或者这个文件本身）才会触发；
+# 也可以在 Actions 页面选本工作流 → Run workflow 手动触发。
+# 跑完在运行页面底部 Artifacts 下载 SPOTLIGHT2-android / SPOTLIGHT2-ios-unsigned。
 # ============================================================
 
-name: 构建 Android + iOS
+name: 构建 2.0 Android + iOS（8 组）
 
 on:
   push:
     branches: [main]
-    # 只有改到 4 组版 App（或者这个文件本身）才触发；2.0 走 build_v2.yml
     paths:
-      - 'offroad_light/**'
-      - '.github/workflows/build.yml'
+      - 'offroad_light_8lutebieban/**'
+      - '.github/workflows/build_v2.yml'
   workflow_dispatch:
 
 jobs:
@@ -31,7 +27,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: offroad_light
+        working-directory: offroad_light_8lutebieban
 
     steps:
       - name: 拉取代码
@@ -92,7 +88,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-logs
+          name: build-logs-v2
           path: /tmp/build-*.log
           retention-days: 7
 
@@ -103,8 +99,8 @@ jobs:
       - name: 上传 APK
         uses: actions/upload-artifact@v4
         with:
-          name: SPOTLIGHT-android
-          path: offroad_light/build/app/outputs/flutter-apk/*.apk
+          name: SPOTLIGHT2-android
+          path: offroad_light_8lutebieban/build/app/outputs/flutter-apk/*.apk
           retention-days: 30
 
   # ---------------- iOS（未签名） ----------------
@@ -120,7 +116,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: offroad_light
+        working-directory: offroad_light_8lutebieban
 
     steps:
       - name: 拉取代码
@@ -147,9 +143,9 @@ jobs:
           mkdir -p build/ios/ipa/Payload
           cp -r build/ios/iphoneos/Runner.app build/ios/ipa/Payload/
           cd build/ios/ipa
-          zip -r -q SPOTLIGHT-unsigned.ipa Payload
+          zip -r -q SPOTLIGHT2-unsigned.ipa Payload
           rm -rf Payload
-          ls -lh SPOTLIGHT-unsigned.ipa
+          ls -lh SPOTLIGHT2-unsigned.ipa
 
       - name: 失败时暴露报错
         if: failure()
@@ -164,6 +160,6 @@ jobs:
       - name: 上传 IPA
         uses: actions/upload-artifact@v4
         with:
-          name: SPOTLIGHT-ios-unsigned
-          path: offroad_light/build/ios/ipa/*.ipa
+          name: SPOTLIGHT2-ios-unsigned
+          path: offroad_light_8lutebieban/build/ios/ipa/*.ipa
           retention-days: 30
