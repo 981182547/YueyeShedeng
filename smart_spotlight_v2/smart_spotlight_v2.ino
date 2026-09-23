@@ -59,6 +59,18 @@
  *   第二片 PCA9685 把 A0 焊到高电平，地址就是 0x41
  *   IO2  <- CI1302 TX          IO3  -> CI1302 RX
  *
+ * ── 只接一片也行 ───────────────────────────────────────────
+ * 哪片板子管哪 4 组，由它的【地址】决定，跟接在哪根线上无关：
+ *   A0 不焊 = 0x40 = 主灯 1~4 组        A0 焊上 = 0x41 = 辅助灯 5~8 组
+ * 只装主灯就只接 0x40，只装辅助灯就只接 0x41，两片都接就 8 组全有。
+ *
+ * 固件每 2 秒探测一次两个地址：
+ *   - 没接的板子不往它写，免得每次都在总线上等一个 NACK、把爆闪节奏拖慢；
+ *   - 板子后上电、或者掉电复位了（MODE1 里 SLEEP 位又变回 1），
+ *     探测到就重新初始化，并按当前状态把它那 16 路重写一遍。
+ * 哪片在线也随状态一起报给 App，没接的那几组在界面上是灰的；
+ * 娱乐模式也只在接了的组之间轮流闪。
+ *
  * ── Arduino IDE 设置 ───────────────────────────────────────
  *   开发板   : ESP32C3 Dev Module
  *   USB CDC On Boot : Enabled
@@ -163,11 +175,12 @@ Preferences    prefs;            /* NVS：只记亮度 */
 #define OP_PARTY         0x17    /* [on]              娱乐模式开/关 */
 
 /* 设备 -> App（Notify）
- * [party, flashMask, dimMask, bright, ver, m3, m2, m1, m0]
+ * [party, flashMask, dimMask, bright, ver, m3, m2, m1, m0, boards]
  * 版本号放在第 4 个字节，和 4 组版的状态包同一个位置 ——
- * 两边的 App 连错了固件都能读到对方的版本号，直接报不匹配。 */
+ * 两边的 App 连错了固件都能读到对方的版本号，直接报不匹配。
+ * boards：bit0 = 0x40 主灯板在线，bit1 = 0x41 辅助灯板在线。 */
 #define OP_STATUS        0x20
-#define STATUS_LEN       9
+#define STATUS_LEN       10
 
 /* 整组动作。必须和 App 的 GroupAct 一致。 */
 enum GroupAct {
@@ -210,10 +223,13 @@ static void pcaWriteLed(uint8_t addr, uint8_t ch, uint16_t on, uint16_t off) {
   Wire.endTransmission();
 }
 
-/* 这个地址上有没有板子应答。只用于开机自检打印。 */
-static bool pcaPresent(uint8_t addr) {
+/* 读一个寄存器。板子不在（没应答）返回 -1 —— 探测在不在线就靠它。 */
+static int pcaRead(uint8_t addr, uint8_t reg) {
   Wire.beginTransmission(addr);
-  return Wire.endTransmission() == 0;
+  Wire.write(reg);
+  if (Wire.endTransmission() != 0) return -1;
+  if (Wire.requestFrom(addr, (uint8_t)1) != 1) return -1;
+  return Wire.read();
 }
 
 static void pcaInitBoard(uint8_t addr, uint32_t freqHz) {
@@ -233,16 +249,8 @@ static void pcaInitBoard(uint8_t addr, uint32_t freqHz) {
   for (uint8_t ch = 0; ch < PCA_CH_PER_BOARD; ch++) pcaWriteLed(addr, ch, 0, 0x1000);
 }
 
-static void pca9685Init(uint32_t freqHz) {
-  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, I2C_SPEED_HZ);
-  for (uint8_t b = 0; b < PCA_BOARDS; b++) {
-    bool ok = pcaPresent(pcaAddr[b]);
-    pcaInitBoard(pcaAddr[b], freqHz);
-    Serial.printf("[init] PCA9685 0x%02X (%s): %s\n", pcaAddr[b],
-                  b == 0 ? "主灯 1~4 组" : "辅助灯 5~8 组",
-                  ok ? "就绪" : "未应答！检查接线 / 地址跳线");
-  }
-}
+/* 哪片板子现在在线。没接的板子一律不写 —— 见文件头「只接一片也行」 */
+static bool pcaOk[PCA_BOARDS] = { false, false };
 
 /* 设置单个通道占空比 0~100%。ch 是全局通道号 0~31，自动分到对应的板子。
  * on 相位按板上通道号错开，多路同时点亮时电源尖峰会小很多。 */
@@ -267,6 +275,7 @@ static void pcaSetChannel(uint8_t ch, int duty) {
 static int lastDuty[CH_TOTAL];
 
 static void pcaSetChannelCached(uint8_t ch, int duty) {
+  if (!pcaOk[ch / PCA_CH_PER_BOARD]) return;     /* 这片没接，不写 */
   if (duty != lastDuty[ch]) {
     pcaSetChannel(ch, duty);
     lastDuty[ch] = duty;
@@ -340,6 +349,43 @@ static void markDirty(bool persist = false) {
     savePending = true;
     saveTimer   = 0;      /* 每来一次新变化就重新计时 */
   }
+}
+
+/* 探测两片 PCA9685 在不在线。开机调一次，之后每 2 秒一次。
+ *
+ * 读 MODE1 寄存器：读不到 = 没接；读到了但 SLEEP 位是 1 = 刚上电或者掉电复位过
+ * （初始化之后 SLEEP 一直是 0）。这两种"从不可用变成可用"的情况都要重新初始化，
+ * 再把这片 16 路的缓存作废 —— 下一个 tick 就会按当前状态整片重写一遍。 */
+#define PROBE_MS         2000
+static uint32_t probeMs = 0;
+
+static void pcaProbe() {
+  for (uint8_t b = 0; b < PCA_BOARDS; b++) {
+    int  mode1 = pcaRead(pcaAddr[b], PCA_MODE1);
+    bool now   = mode1 >= 0;
+    const char *role = (b == 0) ? "主灯 1~4 组" : "辅助灯 5~8 组";
+
+    if (now && (!pcaOk[b] || (mode1 & MODE1_SLEEP))) {
+      pcaInitBoard(pcaAddr[b], PCA9685_FREQ_HZ);
+      for (uint8_t i = 0; i < PCA_CH_PER_BOARD; i++) {
+        lastDuty[b * PCA_CH_PER_BOARD + i] = -1;
+      }
+      Serial.printf("[PCA] 0x%02X（%s）%s\n", pcaAddr[b], role,
+                    pcaOk[b] ? "复位过，已重新初始化" : "在线，已初始化");
+    } else if (!now && pcaOk[b]) {
+      Serial.printf("[PCA] 0x%02X（%s）掉线了\n", pcaAddr[b], role);
+    } else if (!now && probeMs == 0) {
+      Serial.printf("[PCA] 0x%02X（%s）没接\n", pcaAddr[b], role);
+    }
+
+    if (now != pcaOk[b]) markDirty();            /* 在线情况变了，报给 App */
+    pcaOk[b] = now;
+  }
+}
+
+/* 这一组的板子在不在线 */
+static bool groupPresent(uint8_t g) {
+  return pcaOk[CH_OF(g, 0) / PCA_CH_PER_BOARD];
 }
 
 /* ==========================================================
@@ -467,6 +513,7 @@ static void notifyStatus() {
   pkt[10] = (uint8_t)(chMask >> 16);
   pkt[11] = (uint8_t)(chMask >> 8);
   pkt[12] = (uint8_t)(chMask & 0xFF);
+  pkt[13] = (pcaOk[0] ? 0x01 : 0) | (pcaOk[1] ? 0x02 : 0);
 
   txChar->setValue(pkt, sizeof(pkt));
   txChar->notify();
@@ -693,7 +740,8 @@ void setup() {
   for (uint8_t ch = 0; ch < CH_TOTAL; ch++) lastDuty[ch] = -1;
 
   loadSettings();                                /* 只恢复亮度 */
-  pca9685Init(PCA9685_FREQ_HZ);
+  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, I2C_SPEED_HZ);
+  pcaProbe();                                    /* 接了哪片就初始化哪片 */
   applyBootState();                              /* 主灯日行，辅助灯灭 */
   bleInit();
 
@@ -709,6 +757,13 @@ static int spotDuty(uint8_t g, int flashDuty) {
 }
 
 void loop() {
+  /* ---------- 0. 探测板子在不在线（每 2 秒） ---------- */
+  probeMs += TICK_MS;
+  if (probeMs >= PROBE_MS) {
+    pcaProbe();
+    probeMs = 0;
+  }
+
   /* ---------- 1. 语音指令 ---------- */
   pollVoice();
 
@@ -725,13 +780,21 @@ void loop() {
 
   int partyGroup = -1;                           /* 娱乐模式下这会儿亮哪一组 */
   if (party) {
+    /* 只在接了的组之间轮流 —— 只接一片板子时，没接的那 4 组不占节拍 */
+    uint8_t order[GROUP_COUNT];
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < GROUP_COUNT; i++) {
+      if (groupPresent(partyOrder[i])) order[n++] = partyOrder[i];
+    }
     partyMs += TICK_MS;
-    uint32_t step = partyMs / PARTY_STEP_MS;
-    uint32_t cycle = (uint32_t)GROUP_COUNT * PARTY_STEPS_PER_GROUP;
-    if (step >= cycle) { partyMs %= cycle * PARTY_STEP_MS; step %= cycle; }
-    /* 每组内部是 亮-灭-亮-灭：偶数步亮 */
-    if ((step % PARTY_STEPS_PER_GROUP) % 2 == 0) {
-      partyGroup = partyOrder[step / PARTY_STEPS_PER_GROUP];
+    if (n > 0) {
+      uint32_t cycle = (uint32_t)n * PARTY_STEPS_PER_GROUP;
+      uint32_t step  = (partyMs / PARTY_STEP_MS) % cycle;
+      partyMs %= cycle * PARTY_STEP_MS;
+      /* 每组内部是 亮-灭-亮-灭：偶数步亮 */
+      if ((step % PARTY_STEPS_PER_GROUP) % 2 == 0) {
+        partyGroup = order[step / PARTY_STEPS_PER_GROUP];
+      }
     }
   }
 
@@ -796,7 +859,8 @@ void loop() {
   logMs += TICK_MS;
   if (logMs >= 1000) {
     logMs = 0;
-    Serial.printf("Mask:0x%08lX Flash:0x%02X Dim:0x%02X Party:%s Duty:%u%% BLE:%s Notify:%lu |",
+    Serial.printf("PCA:%s%s Mask:0x%08lX Flash:0x%02X Dim:0x%02X Party:%s Duty:%u%% BLE:%s Notify:%lu |",
+                  pcaOk[0] ? "40" : "--", pcaOk[1] ? "41" : "--",
                   (unsigned long)chMask, flashMask, dimMask, party ? "ON" : "--",
                   manualDuty, bleConnected ? "ON" : "--",
                   (unsigned long)notifyCount);

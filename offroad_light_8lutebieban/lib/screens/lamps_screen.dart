@@ -87,10 +87,21 @@ class LampsScreen extends StatelessWidget {
               const SizedBox(height: 16),
 
               // 主灯 1~4 一段、辅助灯 5~8 一段,和主页底部那两排按钮对应
+              // 没接的那片板子:段标题标「未接」,下面 4 组变灰、点不了
               for (final sec in kSections) ...[
-                _SectionHeader(title: sectionName(s, sec)),
+                _SectionHeader(
+                  title: state.isSectionPresent(sec)
+                      ? sectionName(s, sec)
+                      : '${sectionName(s, sec)} · ${s.notFitted}',
+                ),
                 for (final g in sec.groupIds)
-                  _GroupSection(state: state, group: groupById(g)),
+                  IgnorePointer(
+                    ignoring: !state.isSectionPresent(sec),
+                    child: Opacity(
+                      opacity: state.isSectionPresent(sec) ? 1 : 0.35,
+                      child: _GroupSection(state: state, group: groupById(g)),
+                    ),
+                  ),
               ],
             ],
           ),

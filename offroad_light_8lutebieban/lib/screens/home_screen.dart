@@ -274,12 +274,18 @@ class _StatusBar extends StatelessWidget {
     final lightColor = state.litColor;
     final off = state.allDark;
 
-    // 某一区各组不一样(语音单独改过某一组,或者分路页手动改过),就显示「自定义」
+    // 某一区各组不一样(语音单独改过某一组,或者分路页手动改过),就显示「自定义」;
+    // 这一区的板子没接,就显示「未接」
+    String secText(Section sec) {
+      final what = state.isSectionPresent(sec)
+          ? actName(s, state.sectionAct(sec))
+          : s.notFitted;
+      return '${sectionName(s, sec)} $what';
+    }
+
     final text = state.party
         ? s.party
-        : '${s.sectionMain} ${actName(s, state.sectionAct(kSectionMain))}'
-            '   ·   '
-            '${s.sectionAux} ${actName(s, state.sectionAct(kSectionAux))}';
+        : '${secText(kSectionMain)}   ·   ${secText(kSectionAux)}';
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -322,7 +328,8 @@ class _StatusBar extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Text(
-            s.groupCount(state.onGroupCount, kGroupCount),
+            // 分母是接了几组:两片都在是 8,只接一片是 4
+            s.groupCount(state.onGroupCount, state.presentGroupCount),
             style: const TextStyle(color: AppColors.textLo, fontSize: 12.5),
           ),
         ],
@@ -365,10 +372,22 @@ class _GroupChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = state.s;
+    // 这组的板子没接:整张卡片变灰、点不了
+    final present = state.isGroupPresent(group.id);
     // 亮不亮只看"有没有任意一路开着";卡片染成这组【实际亮着的那一路】的颜色
-    final active = state.isGroupLit(group.id);
+    final active = present && state.isGroupLit(group.id);
     final lightColor = state.groupLitColor(group.id);
 
+    return IgnorePointer(
+      ignoring: !present,
+      child: Opacity(
+        opacity: present ? 1 : 0.35,
+        child: _chip(s, active, lightColor),
+      ),
+    );
+  }
+
+  Widget _chip(S s, bool active, Color lightColor) {
     return GestureDetector(
       onTap: () => state.toggleGroup(group),
       child: AnimatedContainer(
@@ -634,34 +653,54 @@ class _SectionRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = state.s;
+    // 这一区的板子没接:整排变灰、点不了,名字下面标「未接」
+    final present = state.isSectionPresent(section);
     // 娱乐模式开着的时候哪个都不高亮 —— 那会儿车上亮的不是这些
-    final current = state.party ? null : state.sectionAct(section);
+    final current = (state.party || !present) ? null : state.sectionAct(section);
 
-    return Row(
-      children: [
-        SizedBox(
-          width: 48,
-          child: Text(
-            sectionName(s, section),
-            style: const TextStyle(
-              fontSize: 12.5,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textHi,
-            ),
-          ),
-        ),
-        for (final a in actSlots(section))
-          Expanded(
-            child: a == null
-                ? const SizedBox.shrink()
-                : _ActButton(
-                    info: a,
-                    label: actName(s, a.act),
-                    selected: current == a.act,
-                    onTap: () => state.applySection(section, a.act),
+    return IgnorePointer(
+      ignoring: !present,
+      child: Opacity(
+        opacity: present ? 1 : 0.35,
+        child: Row(
+          children: [
+            SizedBox(
+              width: 48,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    sectionName(s, section),
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textHi,
+                    ),
                   ),
-          ),
-      ],
+                  if (!present)
+                    Text(
+                      s.notFitted,
+                      style: const TextStyle(
+                          fontSize: 10, color: AppColors.textLo),
+                    ),
+                ],
+              ),
+            ),
+            for (final a in actSlots(section))
+              Expanded(
+                child: a == null
+                    ? const SizedBox.shrink()
+                    : _ActButton(
+                        info: a,
+                        label: actName(s, a.act),
+                        selected: current == a.act,
+                        onTap: () => state.applySection(section, a.act),
+                      ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -32,7 +32,7 @@ class Protocol {
   static const opParty = 0x17; // [on]                娱乐模式开/关
 
   // ---- 设备 -> App(Notify) ----
-  // [party, flashMask, dimMask, bright, ver, m3, m2, m1, m0]
+  // [party, flashMask, dimMask, bright, ver, m3, m2, m1, m0, boards]
   static const opStatus = 0x20;
 
   static Uint8List frame(int op, List<int> payload) {
@@ -91,6 +91,10 @@ class DeviceStatus {
   /// 32 位通道掩码,第 N 位 = CH N【现在亮不亮】。
   final int chMask;
 
+  /// 哪片 PCA9685 在线:bit0 = 0x40 主灯板,bit1 = 0x41 辅助灯板。
+  /// 只接一片的车,另一片那 4 组在界面上是灰的。
+  final int boards;
+
   const DeviceStatus({
     required this.party,
     required this.flashMask,
@@ -98,6 +102,7 @@ class DeviceStatus {
     required this.brightness,
     required this.version,
     required this.chMask,
+    required this.boards,
   });
 
   /// 解析 0x20 上报包的 payload,长度不够返回 null(丢包)。
@@ -116,6 +121,7 @@ class DeviceStatus {
         brightness: 0,
         version: ver,
         chMask: 0,
+        boards: 0x03,
       );
     }
     return DeviceStatus(
@@ -125,6 +131,8 @@ class DeviceStatus {
       brightness: p[3],
       version: ver,
       chMask: (p[5] << 24) | (p[6] << 16) | (p[7] << 8) | p[8],
+      // 早期的 2.0 固件没有这个字节,当成两片都在
+      boards: p.length >= 10 ? p[9] & 0x03 : 0x03,
     );
   }
 
@@ -132,5 +140,5 @@ class DeviceStatus {
   String toString() =>
       'DeviceStatus(mask:0x${chMask.toRadixString(16).padLeft(8, '0')} '
       'flash:0x${flashMask.toRadixString(16)} dim:0x${dimMask.toRadixString(16)} '
-      'party:$party bright:$brightness ver:$version)';
+      'party:$party bright:$brightness ver:$version boards:$boards)';
 }

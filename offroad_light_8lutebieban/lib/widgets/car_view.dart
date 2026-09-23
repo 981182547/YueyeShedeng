@@ -237,12 +237,16 @@ class _CarViewState extends State<CarView> with TickerProviderStateMixin {
                 // 同时开着也是常亮不闪。
                 final flashLevel = flashing ? _flashLevel(_flash.value) : 1.0;
 
-                // 娱乐模式这一拍亮的是哪一组(灭的那一拍是 null)
+                // 娱乐模式这一拍亮的是哪一组(灭的那一拍是 null)。
+                // 只在接了的组之间轮,和固件一致
                 final partyGroup = partying
-                    ? partyGroupAt((_party.value * kPartyCycleMs).floor())
+                    ? partyGroupAt(
+                        (_party.value * kPartyCycleMs).floor(), st.partyOrder)
                     : null;
 
                 LampLit litOf(int g) {
+                  // 这组的板子没接:车上根本没这盏灯,一直画成灭的
+                  if (!st.isGroupPresent(g)) return LampLit.dark;
                   if (partying) {
                     return g == partyGroup
                         ? const LampLit(spot: 1, drl: 0, ambient: 0)
@@ -275,7 +279,8 @@ class _CarViewState extends State<CarView> with TickerProviderStateMixin {
                         boxH: h,
                         lit: litOf(l.group),
                         // 这一组还有没有通道开着(决定灭着时的描边深浅)
-                        on: partying || st.isGroupLit(l.group),
+                        on: st.isGroupPresent(l.group) &&
+                            (partying || st.isGroupLit(l.group)),
                         // 爆闪和娱乐模式要硬切,不能走渐变动画
                         instant: partying || st.isGroupFlashing(l.group),
                         highlighted: widget.highlightGroup == l.group,
@@ -289,27 +294,29 @@ class _CarViewState extends State<CarView> with TickerProviderStateMixin {
                     // 点击热区:铺在光点之上,用的是比灯大一圈的矩形。
                     // 和光点分开画是有原因的 —— 热区中心不等于灯的中心
                     // (A 柱上两只挨着的灯,热区在中线切开),两者重合反而点不准。
+                    // 没接的板子上的灯不给热区,点了也没用
                     for (final l in kLamps)
-                      Positioned(
-                        left: l.hx0 * w,
-                        top: l.hy0 * h,
-                        width: l.hitW * w,
-                        height: l.hitH * h,
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: () => widget.onTapGroup(l.group),
-                          child: kShowHitAreas
-                              ? Container(
-                                  decoration: BoxDecoration(
-                                    border: Border.all(
-                                      color: const Color(0xFF00E5FF),
-                                      width: 1,
+                      if (st.isGroupPresent(l.group))
+                        Positioned(
+                          left: l.hx0 * w,
+                          top: l.hy0 * h,
+                          width: l.hitW * w,
+                          height: l.hitH * h,
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () => widget.onTapGroup(l.group),
+                            child: kShowHitAreas
+                                ? Container(
+                                    decoration: BoxDecoration(
+                                      border: Border.all(
+                                        color: const Color(0xFF00E5FF),
+                                        width: 1,
+                                      ),
                                     ),
-                                  ),
-                                )
-                              : null,
+                                  )
+                                : null,
+                          ),
                         ),
-                      ),
                   ],
                 );
               },

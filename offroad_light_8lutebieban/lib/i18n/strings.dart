@@ -40,6 +40,9 @@ class S {
   String get sectionMain => zh ? '主灯' : 'Main';
   String get sectionAux => zh ? '辅助灯' : 'Aux';
 
+  /// 这片 PCA9685 没接(只装了主灯或只装了辅助灯的车)
+  String get notFitted => zh ? '未接' : 'Not fitted';
+
   // ── 整组动作（主页两排按钮）──────────────────────
   String get actWhite => zh ? '白光' : 'White';
   String get actDrl => zh ? '日行' : 'DRL';

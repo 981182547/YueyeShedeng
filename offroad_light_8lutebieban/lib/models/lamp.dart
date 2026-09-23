@@ -58,10 +58,13 @@ class Section {
   final int id;
   final int groups;
 
+  /// 这一区接在哪片 PCA9685 上:0 = 0x40,1 = 0x41
+  final int board;
+
   /// 只有主灯有「微亮」
   final bool hasDim;
 
-  const Section(this.id, this.groups, {this.hasDim = false});
+  const Section(this.id, this.groups, this.board, {this.hasDim = false});
 
   bool contains(int g) => ((groups >> g) & 1) == 1;
 
@@ -69,11 +72,20 @@ class Section {
       [for (var g = 0; g < kGroupCount; g++) if (contains(g)) g];
 }
 
-const kSectionMain = Section(0, 0x0F, hasDim: true); // 编号 1~4
-const kSectionAux = Section(1, 0xF0); // 编号 5~8
+const kSectionMain = Section(0, 0x0F, 0, hasDim: true); // 编号 1~4,板子 0x40
+const kSectionAux = Section(1, 0xF0, 1); // 编号 5~8,板子 0x41
 const kSections = [kSectionMain, kSectionAux];
 
 Section sectionOf(int group) => group < 4 ? kSectionMain : kSectionAux;
+
+/// 这一组接在哪片板子上:0 = 0x40(主灯),1 = 0x41(辅助灯)。
+///
+/// 车上可能两片都接,也可能只接其中一片 —— 哪片管哪 4 组由板子的
+/// 地址跳线决定。没接的那片,它那 4 组在界面上是灰的。
+int boardOf(int group) => group ~/ 4;
+
+/// 两片都在(状态包里 boards 的两位都是 1)
+const int kAllBoards = 0x03;
 
 /// 一个灯在车图上的画点。
 ///
@@ -328,11 +340,16 @@ const int kPartyStepMs = 60;
 const int kPartyStepsPerGroup = 4; // 每组 亮-灭-亮-灭
 const int kPartyCycleMs = kGroupCount * kPartyStepsPerGroup * kPartyStepMs;
 
-/// 一圈里第 [ms] 毫秒亮的是哪一组;正好是灭的那一拍就返回 null
-int? partyGroupAt(int ms) {
-  final step = (ms ~/ kPartyStepMs) % (kGroupCount * kPartyStepsPerGroup);
+/// 一圈里第 [ms] 毫秒亮的是哪一组;正好是灭的那一拍就返回 null。
+///
+/// [order] 是这次参与轮流的组 —— 只接一片板子时只有那 4 组,
+/// 和固件一样,没接的组不占节拍。4 组一圈 960ms 正好是 8 组一圈的一半,
+/// 所以动画控制器按 8 组的时长循环,接缝处也是连贯的。
+int? partyGroupAt(int ms, List<int> order) {
+  if (order.isEmpty) return null;
+  final step = (ms ~/ kPartyStepMs) % (order.length * kPartyStepsPerGroup);
   if ((step % kPartyStepsPerGroup).isOdd) return null;
-  return kPartyOrder[step ~/ kPartyStepsPerGroup];
+  return order[step ~/ kPartyStepsPerGroup];
 }
 
 /// 固件里定死的几个亮度(对应 .ino 里的 DUTY_*)。

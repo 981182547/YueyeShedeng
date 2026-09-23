@@ -72,6 +72,10 @@ class AppState extends ChangeNotifier {
   /// 白光的亮度。日行灯和氛围灯是固定满亮,不受它影响。
   int brightness = 100;
 
+  /// 哪片 PCA9685 在线:bit0 = 0x40 主灯板,bit1 = 0x41 辅助灯板。
+  /// 没连上设备的时候不知道,当成两片都在。
+  int boards = kAllBoards;
+
   /// 是否收到过设备的状态上报。没连上时界面显示的只是开机默认值。
   bool synced = false;
 
@@ -98,7 +102,8 @@ class AppState extends ChangeNotifier {
   bool get isConnected => conn == ConnState.connected;
 
   /// 一路灯都没亮。娱乐模式开着也算亮着。
-  bool get allDark => chMask == 0 && !party;
+  /// 只看接了的板子 —— 没接的那片上的通道就算开着,车上也没有灯会亮。
+  bool get allDark => (chMask & presentChMask) == 0 && !party;
 
   // ---- 上次连接的设备,下次打开自动连回去 ----
   String? get savedDeviceId => prefs.getString('device_id');
@@ -115,6 +120,7 @@ class AppState extends ChangeNotifier {
       synced = false;
       reportCount = 0;
       deviceVersion = null; // 换设备可能换固件版本,别沿用上一台的
+      boards = kAllBoards; // 换一台车可能接的板子不一样,连上之前都当成在
     }
     notifyListeners();
   }
@@ -135,6 +141,7 @@ class AppState extends ChangeNotifier {
     dimMask = st.dimMask & kGroupsAll;
     party = st.party;
     brightness = st.brightness;
+    boards = st.boards;
     synced = true;
     reportCount++;
     notifyListeners();
@@ -163,8 +170,33 @@ class AppState extends ChangeNotifier {
   bool isGroupFlashing(int groupId) => ((flashMask >> groupId) & 1) == 1;
   bool isGroupDim(int groupId) => ((dimMask >> groupId) & 1) == 1;
 
-  /// 亮着的组数(只要有一路亮就算)
-  int get onGroupCount => kGroups.where((g) => isGroupLit(g.id)).length;
+  // ---- 板子在不在线 ----
+
+  bool isBoardPresent(int board) => ((boards >> board) & 1) == 1;
+  bool isGroupPresent(int groupId) => isBoardPresent(boardOf(groupId));
+  bool isSectionPresent(Section sec) => isBoardPresent(sec.board);
+
+  /// 接了的那几组的通道位
+  int get presentChMask {
+    var m = 0;
+    for (final g in kGroups) {
+      if (isGroupPresent(g.id)) m |= groupBits(g.id);
+    }
+    return m;
+  }
+
+  /// 接了几组(两片都在是 8,只接一片是 4)
+  int get presentGroupCount =>
+      kGroups.where((g) => isGroupPresent(g.id)).length;
+
+  /// 娱乐模式轮流的顺序 —— 和固件一样,只在接了的组之间轮
+  List<int> get partyOrder =>
+      [for (final g in kPartyOrder) if (isGroupPresent(g)) g];
+
+  /// 亮着的组数(只要有一路亮就算,没接的不算)
+  int get onGroupCount => kGroups
+      .where((g) => isGroupPresent(g.id) && isGroupLit(g.id))
+      .length;
 
   /// 这组现在是哪个图章;分路页手动改过、对不上任何一种就是 null
   int? groupAct(int groupId) =>
@@ -186,8 +218,9 @@ class AppState extends ChangeNotifier {
     return act;
   }
 
-  /// 有没有哪组被分路页手动改过(对不上任何图章)
-  bool get anyCustom => kGroups.any((g) => groupAct(g.id) == null);
+  /// 有没有哪组被分路页手动改过(对不上任何图章)。没接的组不算。
+  bool get anyCustom =>
+      kGroups.any((g) => isGroupPresent(g.id) && groupAct(g.id) == null);
 
   /// 这一组的这一路这会儿出多少亮度 0~100。
   ///
@@ -211,6 +244,7 @@ class AppState extends ChangeNotifier {
   bool get brightnessAdjustable =>
       !party &&
       kGroups.any((g) =>
+          isGroupPresent(g.id) &&
           isGroupFnOn(g.id, LampFn.spot) &&
           !isGroupFlashing(g.id) &&
           !isGroupDim(g.id));
@@ -229,10 +263,11 @@ class AppState extends ChangeNotifier {
   /// 整车这会儿是什么色,顶上那个状态点用它
   Color get litColor {
     if (party) return AppColors.lightWhite;
-    final anyWhite = kGroups.any((g) =>
+    final present = kGroups.where((g) => isGroupPresent(g.id));
+    final anyWhite = present.any((g) =>
         isGroupFnOn(g.id, LampFn.spot) || isGroupFnOn(g.id, LampFn.drl));
     if (anyWhite) return AppColors.lightWhite;
-    final anyAmber = kGroups.any((g) => isGroupFnOn(g.id, LampFn.ambient));
+    final anyAmber = present.any((g) => isGroupFnOn(g.id, LampFn.ambient));
     return anyAmber ? AppColors.lightYellow : AppColors.lightWhite;
   }
 
@@ -366,7 +401,9 @@ class AppState extends ChangeNotifier {
   /// 主灯日行、辅助灯灭,和车子点火时一样。
   void togglePower() {
     if (allDark) {
-      applySection(kSectionMain, GroupAct.drl);
+      // 只接了辅助灯板的车没有主灯,那就让辅助灯日行 —— 按了总得有灯亮
+      final sec = isSectionPresent(kSectionMain) ? kSectionMain : kSectionAux;
+      applySection(sec, GroupAct.drl);
     } else {
       applyGroups(kGroupsAll, GroupAct.off);
     }
