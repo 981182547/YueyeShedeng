@@ -2,7 +2,7 @@
 extern "C"{ void * __dso_handle = 0 ;}
 #include "setup.h"
 #include "HardwareSerial.h"
-#include "myLib/asr_event.h"
+#include "myLib/asr_event.h"   // set_wakeup_forever() 在这里面，不能删
 
 uint32_t snid;
 void ASR_CODE();
