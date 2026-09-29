@@ -2,19 +2,20 @@
 extern "C"{ void * __dso_handle = 0 ;}
 #include "setup.h"
 #include "HardwareSerial.h"
-#include "myLib/asr_event.h"
 
 uint32_t snid;
 void ASR_CODE();
 
-//{speak:小蝶-清新女声,vol:10,speed:10,platform:haohaodada}
+//{speak:Dora-英语女声,vol:10,speed:10,platform:haohaodada}
 //{playid:10001,voice:}
 //{playid:10002,voice:}
 
 /* ============================================================
  * 越野射灯 2.0 —— 语音命令【English · 数字编号版】，串口指令协议（115200）
  *
- * 在天问里把模型切成【英文模型】，播报音选英文发音人（上面那行 speak 会跟着变）。
+ * 按天问【英文模型】的模板写的：播报音是 Dora-英语女声，回复语用英文。
+ * 模板里的唤醒词「天问五幺」和 set_state_enter_wakeup(10000) 都去掉了（见下面说明），
+ * 欢迎词 / 退出语留空 —— 模板里那两句说的是「用天问五幺唤醒我」，已经对不上了。
  * 说法用车图上的编号，数字读成英文单词（one ~ eight）：
  *   light N on -> ON（白光）   light N daytime -> DRL   light N ambient -> AMB
  *   light N strobe -> FLASH    light N off -> OFF
