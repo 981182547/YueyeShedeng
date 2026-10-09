@@ -30,8 +30,8 @@
 
 #define ASR_BAUD          115200
 #define CMD_QUEUE_LEN     4       /* 排队等发的语音指令，语音是人说的，4 条足够 */
-#define CMD_MAX_TRIES     4       /* 一条指令最多发 4 次（硬件本身还会再重试） */
-#define CMD_RETRY_GAP_MS  40      /* 两次重发之间隔多久 */
+#define CMD_MAX_TRIES     8       /* 一条指令最多发 8 次（硬件本身还会再重试） */
+#define CMD_RETRY_GAP_MS  60      /* 两次重发之间隔多久 —— 拉开一点，躲过控制板忙蓝牙的那一下 */
 #define CMD_STALE_MS      3000    /* 排队超过 3 秒还没发出去就丢掉，免得过一会儿灯自己乱变 */
 #define SEND_GUARD_MS     300     /* 等发送回执最多等这么久，超时当作这一包丢了 */
 
@@ -76,9 +76,13 @@ static void printMac(const char *label, const uint8_t *m) {
 /* ==========================================================
  * ESP-NOW
  * ========================================================== */
+/* 心跳成功 / 失败计数，每 5 秒打印一次 —— 看链路实际丢多少包 */
+static volatile uint16_t pingOk = 0, pingFail = 0;
+
 static void onSent(LINK_SEND_CB_ARGS) {
   bool ok = (status == ESP_NOW_SEND_SUCCESS);
   uint8_t t = inflight;
+  if (t == LINK_PING) { if (ok) pingOk++; else pingFail++; }
   /* 广播没有应答，"发送成功"只代表发出去了，不能当成连上 */
   if (ok && t != LINK_PAIR_REQ) lastAckMs = millis();
   resultType  = t;
@@ -398,6 +402,18 @@ void loop() {
   if (connected != wasConnected) {
     wasConnected = connected;
     Serial.println(connected ? "[连接] 已连上控制板" : "[连接] 和控制板断开了");
+  }
+
+  /* 每 5 秒报一次心跳成功率 */
+  static uint32_t lastStat = 0;
+  if (millis() - lastStat >= 5000) {
+    lastStat = millis();
+    if (paired && !pairing) {
+      uint16_t ok = pingOk, fail = pingFail;
+      pingOk = 0;
+      pingFail = 0;
+      Serial.printf("[链路] 5 秒内心跳：成功 %u / 共 %u\n", ok, ok + fail);
+    }
   }
 
   delay(5);
