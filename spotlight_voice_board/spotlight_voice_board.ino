@@ -283,6 +283,30 @@ static void pollAsr() {
   }
 }
 
+/* 调试用：USB 串口监视器里输入 APS:ON（或 $APS:ON）回车，
+ * 和 CI1302 发来的走同一条路 —— 不用对着语音模块说话也能把整条链路测一遍。
+ * 大小写都行，「换行和回车」怎么选都行。 */
+static void pollUsb() {
+  static char buf[48];
+  static uint8_t n = 0;
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\r' || c == '\n') {
+      if (n > 0) {
+        buf[n] = '\0';
+        char line[50];
+        snprintf(line, sizeof(line), buf[0] == '$' ? "%s" : "$%s", buf);
+        for (char *p = line; *p; p++) *p = (char)toupper((unsigned char)*p);
+        handleAsrLine(line);
+      }
+      n = 0;
+      continue;
+    }
+    if (n < sizeof(buf) - 1) buf[n++] = c;
+    else n = 0;
+  }
+}
+
 /* 发队头那条指令；失败了隔一会儿重发，发够次数还不行就放弃 */
 static void pumpCmds() {
   uint32_t now = millis();
@@ -362,6 +386,7 @@ void setup() {
 void loop() {
   pollPairing();
   pollAsr();
+  pollUsb();                       /* 调试：串口监视器也能输指令 */
   pumpCmds();
   pumpPing();
 

@@ -934,6 +934,30 @@ static void pollLink() {
   }
 }
 
+/* 调试用：USB 串口监视器里输入 APS:ON（或 $APS:ON）回车，直接执行 ——
+ * 不经过语音板，用来单独查灯和 PCA9685。大小写都行。 */
+static void pollUsb() {
+  static char buf[48];
+  static uint8_t n = 0;
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\r' || c == '\n') {
+      if (n > 0) {
+        buf[n] = '\0';
+        char line[50];
+        snprintf(line, sizeof(line), buf[0] == '$' ? "%s" : "$%s", buf);
+        for (char *p = line; *p; p++) *p = (char)toupper((unsigned char)*p);
+        Serial.printf("[串口] 收到: %s\n", line);
+        handleVoiceLine(line);
+      }
+      n = 0;
+      continue;
+    }
+    if (n < sizeof(buf) - 1) buf[n++] = c;
+    else n = 0;
+  }
+}
+
 /* ==========================================================
  * 九、setup / loop
  * ========================================================== */
@@ -978,6 +1002,7 @@ void loop() {
 
   /* ---------- 1. 语音板过来的指令、配对、状态灯 ---------- */
   pollLink();
+  pollUsb();                       /* 调试：串口监视器也能输指令 */
 
   /* ---------- 2. 爆闪 / 娱乐模式节奏 ---------- */
   int flashDuty = 0;
