@@ -131,7 +131,7 @@ static bool sendPkt(const uint8_t *mac, uint8_t type, uint8_t s, const char *tex
 static void linkInit() {
   WiFi.mode(WIFI_STA);
   esp_wifi_set_ps(WIFI_PS_NONE);              /* 无线常开：反应快（这块板没有蓝牙，可以这么设） */
-  esp_wifi_set_max_tx_power(78);              /* 19.5 dBm */
+  esp_wifi_set_max_tx_power(LINK_TX_POWER);   /* 见 spotlight_link.h */
   esp_wifi_set_promiscuous(true);
   esp_wifi_set_channel(LINK_CHANNEL, WIFI_SECOND_CHAN_NONE);
   esp_wifi_set_promiscuous(false);

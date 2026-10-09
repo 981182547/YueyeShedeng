@@ -36,6 +36,11 @@
 #include <esp_idf_version.h>
 
 #define LINK_CHANNEL         1        /* 两块板固定在同一个信道 */
+
+/* 发射功率，单位 0.25 dBm：60 = 15 dBm（最大 80 = 20 dBm）。
+ * 驾驶室到前舱只有一两米，但中间隔着防火墙的金属板，别降得太低；
+ * 装车试过信号够的话可以再往下调，比如 44 = 11 dBm，ESP32 会更省电、更凉。 */
+#define LINK_TX_POWER        60
 #define LINK_MAGIC           0xA7     /* 包头，区分别的 ESP-NOW 设备（比如遥控小车） */
 #define LINK_TEXT_MAX        24       /* 最长的指令 "ALL:PARTY_OFF" 才 13 个字符 */
 

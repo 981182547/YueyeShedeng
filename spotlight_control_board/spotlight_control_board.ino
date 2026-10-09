@@ -735,6 +735,9 @@ static bool     outputsEnabled = false;    /* OE 拉低了没有 */
 
 static portMUX_TYPE linkMux = portMUX_INITIALIZER_UNLOCKED;
 
+/* 收到语音板的包数，每 5 秒打印一次。心跳 0.5 秒一个，正常应该在 10 个左右 */
+static volatile uint16_t linkRxCount = 0;
+
 struct RxCmd { uint8_t seq; uint8_t len; char text[LINK_TEXT_MAX]; };
 static QueueHandle_t rxQ = nullptr;
 
@@ -755,6 +758,8 @@ static void linkOnRecv(LINK_RECV_CB_ARGS) {
   portENTER_CRITICAL(&linkMux);
   bool fromPeer = linkPaired && memcmp(src, linkPeer, 6) == 0;
   portEXIT_CRITICAL(&linkMux);
+
+  if (fromPeer) linkRxCount++;
 
   switch (p->type) {
     case LINK_PAIR_REQ:
@@ -806,7 +811,7 @@ static void linkInit() {
   WiFi.mode(WIFI_STA);
   /* 这块板同时跑蓝牙：WiFi 必须留在默认的 modem sleep ——
      设成 WIFI_PS_NONE 在 WiFi 和蓝牙共存时会报错。ESP-NOW 照样收得到。 */
-  esp_wifi_set_max_tx_power(78);              /* 19.5 dBm */
+  esp_wifi_set_max_tx_power(LINK_TX_POWER);   /* 见 spotlight_link.h */
   esp_wifi_set_promiscuous(true);
   esp_wifi_set_channel(LINK_CHANNEL, WIFI_SECOND_CHAN_NONE);
   esp_wifi_set_promiscuous(false);
@@ -816,6 +821,16 @@ static void linkInit() {
     return;
   }
   esp_now_register_recv_cb(linkOnRecv);
+
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+  /* 「语音板一会儿连上一会儿断开」就是这里：
+     蓝牙开着时 WiFi 只能用 modem sleep，而这块板又没连路由器 ——
+     这种状态下射频一闲就关，语音板发来的包大部分到的时候正好没在听。
+     把 ESP-NOW 的唤醒窗口开到最大（65535 = 一直醒着），
+     射频除了让给蓝牙的时间，其余时候都开着收。 */
+  esp_wifi_connectionless_module_set_wake_interval(100);
+  esp_now_set_wake_window(65535);
+#endif
 
   linkPrefs.begin("link", true);
   if (linkPrefs.getBytesLength("peer") == 6) {
@@ -931,6 +946,16 @@ static void pollLink() {
   if (connected != wasConnected) {
     wasConnected = connected;
     Serial.println(connected ? "[连接] 语音板已连上" : "[连接] 和语音板断开了");
+  }
+
+  static uint32_t lastStat = 0;
+  if (now - lastStat >= 5000) {
+    lastStat = now;
+    if (linkPaired && !linkPairing) {
+      uint16_t n = linkRxCount;
+      linkRxCount = 0;
+      Serial.printf("[链路] 5 秒内收到语音板 %u 个包（正常约 10 个）\n", n);
+    }
   }
 }
 
