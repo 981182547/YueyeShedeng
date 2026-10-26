@@ -79,6 +79,17 @@
  * 哪片在线也随状态一起报给 App，没接的那几组在界面上是灰的；
  * 娱乐模式也只在接了的组之间轮流闪。
  *
+ * ── 上电 / 电压抖动保护 ─────────────────────────────────────
+ * 目标：电源再怎么抖，最坏只是灯晚一点亮，不会有哪一路自己乱亮。
+ *   开机：OE 拉高锁住输出 → 等电源稳定（300ms，掉电复位等 1 秒）→ 释放 I2C 总线
+ *         → 广播软件复位两片 → 每片「全关 → 设频率 → 唤醒 → 回读确认」
+ *         → 开机状态写进去之后才拉低 OE。
+ *   运行：每秒巡检，哪片被复位过（SLEEP 位又变 1）或者初始化没成功，
+ *         先拉高 OE、重新初始化并回读，下一拍整片重写当前状态，再拉低 OE。
+ *   只焊一片也一样：没焊的那片跳过，不会卡住 OE。
+ *   有一片应答了却回读不对（寄存器可能是乱的）就保持全关，每秒重试。
+ *   不关 ESP32 的掉电检测（brownout），电压不够就让它复位，别半死不活地乱写寄存器。
+ *
  * ── Arduino IDE 设置 ───────────────────────────────────────
  *   开发板   : ESP32C3 Dev Module
  *   USB CDC On Boot : Enabled
@@ -92,6 +103,7 @@
 #include "spotlight_link.h"
 
 #include <Wire.h>
+#include <esp_system.h>
 #include <math.h>
 #include <string.h>
 #include <Preferences.h>
@@ -217,11 +229,23 @@ enum GroupAct {
 #define MODE1_SLEEP      0x10
 #define MODE1_ALLCALL    0x01
 
-static void pcaWrite(uint8_t addr, uint8_t reg, uint8_t val) {
+#define PCA_LED0_OFF_H   0x09
+#define PCA_LED15_OFF_H  0x45
+#define PCA_ALL_LED_ON_L 0xFA
+#define LED_FULL_OFF     0x10   /* LEDn_OFF_H 的 bit4：这一路完全关闭 */
+
+static bool pcaWrite(uint8_t addr, uint8_t reg, uint8_t val) {
   Wire.beginTransmission(addr);
   Wire.write(reg);
   Wire.write(val);
-  Wire.endTransmission();
+  return Wire.endTransmission() == 0;
+}
+
+static bool pcaWriteBuf(uint8_t addr, uint8_t reg, const uint8_t *buf, uint8_t n) {
+  Wire.beginTransmission(addr);
+  Wire.write(reg);
+  Wire.write(buf, n);
+  return Wire.endTransmission() == 0;
 }
 
 static void pcaWriteLed(uint8_t addr, uint8_t ch, uint16_t on, uint16_t off) {
@@ -243,25 +267,78 @@ static int pcaRead(uint8_t addr, uint8_t reg) {
   return Wire.read();
 }
 
-static void pcaInitBoard(uint8_t addr, uint32_t freqHz) {
-  pcaWrite(addr, PCA_MODE1, MODE1_SLEEP);        /* 睡眠态才能改 PRESCALE */
-  delay(1);
+/* 初始化一片：先全关，再设频率、唤醒，最后回读确认。全部对上才返回 true。
+ *
+ * 顺序有讲究：先把 16 路全部打成「完全关闭」，再唤醒振荡器 ——
+ * 不管寄存器里原来留着什么（比如 ESP32 自己重启了、PCA9685 没断电），
+ * 一醒过来就是全关，不会有哪一路先亮一下。 */
+static bool pcaInitBoard(uint8_t addr, uint32_t freqHz) {
+  /* 1. 睡眠（改分频必须睡眠）+ 自动递增 —— 下面一次写 4 个字节要靠自动递增 */
+  if (!pcaWrite(addr, PCA_MODE1, MODE1_SLEEP | MODE1_AI | MODE1_ALLCALL)) return false;
+  delayMicroseconds(500);
 
+  /* 2. 16 路全部完全关闭：ALL_LED 一次写 4 个字节，会填满每一路的寄存器 */
+  static const uint8_t allOff[4] = { 0x00, 0x00, 0x00, LED_FULL_OFF };
+  if (!pcaWriteBuf(addr, PCA_ALL_LED_ON_L, allOff, 4)) return false;
+
+  /* 3. 分频、输出方式 */
   uint8_t prescale = (uint8_t)(roundf(25000000.0f / (4096.0f * freqHz)) - 1);
-  pcaWrite(addr, PCA_PRESCALE, prescale);
-  delay(1);
+  if (!pcaWrite(addr, PCA_PRESCALE, prescale)) return false;
+  if (!pcaWrite(addr, PCA_MODE2, 0x04)) return false;    /* OUTDRV = 推挽 */
 
-  pcaWrite(addr, PCA_MODE1, MODE1_AI | MODE1_ALLCALL);
-  delay(1);
-  pcaWrite(addr, PCA_MODE1, MODE1_RESTART | MODE1_AI | MODE1_ALLCALL);
-  pcaWrite(addr, PCA_MODE2, 0x04);               /* OUTDRV = 推挽 */
-  delay(1);
+  /* 4. 唤醒，振荡器要 500us 以上才稳 */
+  if (!pcaWrite(addr, PCA_MODE1, MODE1_AI | MODE1_ALLCALL)) return false;
+  delayMicroseconds(600);
 
-  for (uint8_t ch = 0; ch < PCA_CH_PER_BOARD; ch++) pcaWriteLed(addr, ch, 0, 0x1000);
+  /* 5. 回读确认。MODE1 的 RESTART 位读出来可能是 1，不参与比较 */
+  int m1  = pcaRead(addr, PCA_MODE1);
+  int m2  = pcaRead(addr, PCA_MODE2);
+  int pre = pcaRead(addr, PCA_PRESCALE);
+  int l0  = pcaRead(addr, PCA_LED0_OFF_H);
+  int l15 = pcaRead(addr, PCA_LED15_OFF_H);
+  return m1 >= 0 && (m1 & 0x7F) == (MODE1_AI | MODE1_ALLCALL)
+      && m2 == 0x04
+      && pre == prescale
+      && l0 >= 0 && (l0 & LED_FULL_OFF)
+      && l15 >= 0 && (l15 & LED_FULL_OFF);
 }
 
-/* 哪片板子现在在线。没接的板子一律不写 —— 见文件头「只接一片也行」 */
-static bool pcaOk[PCA_BOARDS] = { false, false };
+/* 开机时用一次：往 I2C 广播地址 0x00 发软件复位，所有 PCA9685 一起回到出厂状态。
+ * 运行中不能用 —— 它会把正常亮着的另一片也一起复位。 */
+static void pcaSoftwareResetAll() {
+  Wire.beginTransmission(0x00);
+  Wire.write(0x06);
+  Wire.endTransmission();
+  delay(2);
+}
+
+/* I2C 总线被拉死时的释放：传输到一半被复位的从机可能一直按住 SDA，
+ * 手动打最多 9 个 SCL 时钟让它把这个字节吐完，再补一个 STOP。
+ * 必须在 Wire.begin 之前（或 Wire.end 之后）调用。 */
+static void i2cBusRecover() {
+  pinMode(PIN_I2C_SDA, INPUT_PULLUP);
+  pinMode(PIN_I2C_SCL, OUTPUT_OPEN_DRAIN);
+  digitalWrite(PIN_I2C_SCL, HIGH);
+  delayMicroseconds(5);
+  for (int i = 0; i < 9 && digitalRead(PIN_I2C_SDA) == LOW; i++) {
+    digitalWrite(PIN_I2C_SCL, LOW);
+    delayMicroseconds(5);
+    digitalWrite(PIN_I2C_SCL, HIGH);
+    delayMicroseconds(5);
+  }
+  pinMode(PIN_I2C_SDA, OUTPUT_OPEN_DRAIN);       /* STOP：SCL 高的时候 SDA 由低变高 */
+  digitalWrite(PIN_I2C_SDA, LOW);
+  delayMicroseconds(5);
+  digitalWrite(PIN_I2C_SDA, HIGH);
+  delayMicroseconds(5);
+}
+
+/* 哪片板子现在能用（在线、初始化并回读确认过）。不能用的板子一律不写 —— 见文件头「只接一片也行」 */
+static bool pcaOk[PCA_BOARDS]  = { false, false };
+/* 应答了、但初始化回读对不上：寄存器可能是乱的，这种情况宁可全部关着 */
+static bool pcaBad[PCA_BOARDS] = { false, false };
+/* OE 现在是不是拉低（输出打开） */
+static bool outputsEnabled = false;
 
 /* 设置单个通道占空比 0~100%。ch 是全局通道号 0~31，自动分到对应的板子。
  * on 相位按板上通道号错开，多路同时点亮时电源尖峰会小很多。 */
@@ -362,35 +439,88 @@ static void markDirty(bool persist = false) {
   }
 }
 
-/* 探测两片 PCA9685 在不在线。开机调一次，之后每 2 秒一次。
+/* 立刻关掉全部输出（OE 拉高）。两片共用一个 OE，所以是两片一起关。 */
+static void pcaBlank() {
+  digitalWrite(PIN_PCA_OE, HIGH);
+  if (outputsEnabled) {
+    outputsEnabled = false;
+    Serial.println("[PCA] 输出已关闭（OE 拉高）");
+  }
+}
+
+/* OE：焊了的板子都初始化确认过、当前状态也写进去了，才打开输出。
+ * 只要有一片「应答了却初始化不对」（寄存器可能是乱的），宁可全部关着，每秒重试。
+ * 只焊一片的话就只看那一片；一片都没焊就一直关着。 */
+static void pcaUpdateOE() {
+  bool want = (pcaOk[0] || pcaOk[1]) && !pcaBad[0] && !pcaBad[1];
+  if (want == outputsEnabled) return;
+  if (!want) {
+    pcaBlank();
+    return;
+  }
+  digitalWrite(PIN_PCA_OE, LOW);
+  outputsEnabled = true;
+  Serial.println("[PCA] 输出已打开（OE 拉低）");
+}
+
+/* 巡检两片 PCA9685。开机调一次，之后每秒一次。
  *
- * 读 MODE1 寄存器：读不到 = 没接；读到了但 SLEEP 位是 1 = 刚上电或者掉电复位过
- * （初始化之后 SLEEP 一直是 0）。这两种"从不可用变成可用"的情况都要重新初始化，
- * 再把这片 16 路的缓存作废 —— 下一个 tick 就会按当前状态整片重写一遍。 */
-#define PROBE_MS         2000
+ * 读 MODE1：读不到 = 没焊（不算故障，跳过）；读到了但 SLEEP 位是 1 =
+ * 刚上电或者被电压抖动复位过（初始化之后 SLEEP 一直是 0）。
+ * 要重新初始化时：先拉高 OE 锁住输出 → 全关、设频率、唤醒、回读确认 →
+ * 把这片 16 路的缓存作废，下一拍按当前状态整片重写 → 写完由 pcaUpdateOE() 再打开 OE。
+ * 所以电源再怎么抖，最坏也只是灯晚一点亮，不会有哪一路自己乱亮。 */
+#define PROBE_MS         1000
 static uint32_t probeMs = 0;
 
-static void pcaProbe() {
+static void pcaProbe(bool boot) {
+  bool busRecovered = false;
   for (uint8_t b = 0; b < PCA_BOARDS; b++) {
-    int  mode1 = pcaRead(pcaAddr[b], PCA_MODE1);
-    bool now   = mode1 >= 0;
     const char *role = (b == 0) ? "主灯 1~4 组" : "辅助灯 5~8 组";
+    int mode1 = pcaRead(pcaAddr[b], PCA_MODE1);
 
-    if (now && (!pcaOk[b] || (mode1 & MODE1_SLEEP))) {
-      pcaInitBoard(pcaAddr[b], PCA9685_FREQ_HZ);
-      for (uint8_t i = 0; i < PCA_CH_PER_BOARD; i++) {
-        lastDuty[b * PCA_CH_PER_BOARD + i] = -1;
-      }
-      Serial.printf("[PCA] 0x%02X（%s）%s\n", pcaAddr[b], role,
-                    pcaOk[b] ? "复位过，已重新初始化" : "在线，已初始化");
-    } else if (!now && pcaOk[b]) {
-      Serial.printf("[PCA] 0x%02X（%s）掉线了\n", pcaAddr[b], role);
-    } else if (!now && probeMs == 0) {
-      Serial.printf("[PCA] 0x%02X（%s）没接\n", pcaAddr[b], role);
+    /* 读不到、而且 SDA 被拉在低电平：不是没焊，是总线被拉死了，释放一下再读 */
+    if (mode1 < 0 && !busRecovered && digitalRead(PIN_I2C_SDA) == LOW) {
+      busRecovered = true;
+      Serial.println("[PCA] I2C 总线被拉死，释放一下");
+      Wire.end();
+      i2cBusRecover();
+      Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, I2C_SPEED_HZ);
+      mode1 = pcaRead(pcaAddr[b], PCA_MODE1);
     }
 
-    if (now != pcaOk[b]) markDirty();            /* 在线情况变了，报给 App */
-    pcaOk[b] = now;
+    if (mode1 < 0) {                             /* 没焊，或者掉线了 */
+      if (pcaOk[b] || pcaBad[b]) {
+        Serial.printf("[PCA] 0x%02X（%s）掉线了\n", pcaAddr[b], role);
+        markDirty();                             /* 在线情况变了，报给 App */
+      } else if (boot) {
+        Serial.printf("[PCA] 0x%02X（%s）没焊\n", pcaAddr[b], role);
+      }
+      pcaOk[b]  = false;
+      pcaBad[b] = false;
+      continue;
+    }
+
+    if (pcaOk[b] && !(mode1 & MODE1_SLEEP)) continue;   /* 一切正常 */
+
+    /* 新焊上的、被复位过的、上次初始化没成功的：锁住输出，重新初始化 */
+    pcaBlank();
+    bool ok = false;
+    for (int i = 0; i < 3 && !ok; i++) {
+      ok = pcaInitBoard(pcaAddr[b], PCA9685_FREQ_HZ);
+      if (!ok) delay(20);
+    }
+    if (ok) {
+      for (uint8_t i = 0; i < PCA_CH_PER_BOARD; i++) lastDuty[b * PCA_CH_PER_BOARD + i] = -1;
+      Serial.printf("[PCA] 0x%02X（%s）%s\n", pcaAddr[b], role,
+                    pcaOk[b] ? "被复位过，已重新初始化" : "在线，已初始化并确认全关");
+    } else {
+      Serial.printf("[PCA] 0x%02X（%s）初始化回读不对，输出保持关闭，1 秒后重试\n",
+                    pcaAddr[b], role);
+    }
+    if (ok != pcaOk[b]) markDirty();
+    pcaOk[b]  = ok;
+    pcaBad[b] = !ok;
   }
 }
 
@@ -731,7 +861,6 @@ static uint32_t linkPairingSince = 0;
 static volatile uint32_t lastLinkMs = 0;   /* 最近一次收到语音板的包 */
 static volatile bool     gotPairReq = false;
 static uint8_t  pairReqMac[6];
-static bool     outputsEnabled = false;    /* OE 拉低了没有 */
 
 static portMUX_TYPE linkMux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -986,6 +1115,22 @@ static void pollUsb() {
 /* ==========================================================
  * 九、setup / loop
  * ========================================================== */
+/* 开机打印复位原因 —— 灯乱亮时先看这一行，是不是电源抖动引起的掉电复位 */
+static const char *resetReasonText(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON:  return "正常上电";
+    case ESP_RST_BROWNOUT: return "掉电复位（电压跌落）";
+    case ESP_RST_SW:       return "软件重启";
+    case ESP_RST_PANIC:    return "程序崩溃后重启";
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT:      return "看门狗重启";
+    case ESP_RST_EXT:      return "外部复位";
+    case ESP_RST_DEEPSLEEP:return "深睡唤醒";
+    default:               return "其他";
+  }
+}
+
 void setup() {
   /* OE 先明确拉高（关输出）—— 板上本来有上拉，这里再保险一次；
      等开机状态写进 PCA9685 之后，loop 里才拉低打开 */
@@ -997,11 +1142,18 @@ void setup() {
 
   Serial.begin(115200);                          /* USB CDC 日志 */
 
+  /* 等电源稳定再碰 PCA9685。掉电复位说明电压刚抖过，多等一会儿 */
+  esp_reset_reason_t rr = esp_reset_reason();
+  Serial.printf("[init] 复位原因：%s\n", resetReasonText(rr));
+  delay(rr == ESP_RST_BROWNOUT ? 1000 : 300);
+
   for (uint8_t ch = 0; ch < CH_TOTAL; ch++) lastDuty[ch] = -1;
 
   loadSettings();                                /* 只恢复亮度 */
+  i2cBusRecover();                               /* 万一上次重启时总线被拉死了 */
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, I2C_SPEED_HZ);
-  pcaProbe();                                    /* 接了哪片就初始化哪片 */
+  pcaSoftwareResetAll();                         /* 两片都回到出厂状态，清掉重启前留下的输出 */
+  pcaProbe(true);                                /* 焊了哪片就初始化哪片，回读确认全关 */
   applyBootState();                              /* 主灯日行，辅助灯灭 */
   bleInit();
   linkInit();                                    /* ESP-NOW：收语音板的指令 */
@@ -1018,10 +1170,10 @@ static int spotDuty(uint8_t g, int flashDuty) {
 }
 
 void loop() {
-  /* ---------- 0. 探测板子在不在线（每 2 秒） ---------- */
+  /* ---------- 0. 巡检两片 PCA9685（每秒） ---------- */
   probeMs += TICK_MS;
   if (probeMs >= PROBE_MS) {
-    pcaProbe();
+    pcaProbe(false);
     probeMs = 0;
   }
 
@@ -1094,12 +1246,8 @@ void loop() {
     pcaSetChannelCached(CH_OF(g, FN_COUNT), 0);
   }
 
-  /* 第一次把开机状态写进 PCA9685 之后，才打开输出（OE 拉低） */
-  if (!outputsEnabled) {
-    outputsEnabled = true;
-    digitalWrite(PIN_PCA_OE, LOW);
-    Serial.println("[PCA] 输出已打开（OE 拉低）");
-  }
+  /* 当前状态已经写进 PCA9685 了，这时候才决定开不开输出（OE） */
+  pcaUpdateOE();
 
   /* ---------- 4. NVS 延迟落盘 ---------- */
   if (savePending) {
