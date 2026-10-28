@@ -2,21 +2,19 @@
 extern "C"{ void * __dso_handle = 0 ;}
 #include "setup.h"
 #include "HardwareSerial.h"
-#include "myLib/asr_event.h"   // set_wakeup_forever() 在这里面，不能删
+#include "myLib/asr_event.h"
 
 uint32_t snid;
 void ASR_CODE();
 
 //{speak:Dora-英语女声,vol:10,speed:10,platform:haohaodada}
-//{playid:10001,voice:}
-//{playid:10002,voice:}
+//{playid:10001,voice:Welcome. Say hey aurora to wake me up.}
+//{playid:10002,voice:Going to sleep. Say hey aurora to wake me up.}
 
 /* ============================================================
  * 越野射灯 2.0 —— 语音命令【English · 数字编号版】，串口指令协议（115200）
  *
  * 按天问【英文模型】的模板写的：播报音是 Dora-英语女声，回复语用英文。
- * 模板里的唤醒词「天问五幺」和 set_state_enter_wakeup(10000) 都去掉了（见下面说明），
- * 欢迎词 / 退出语留空 —— 模板里那两句说的是「用天问五幺唤醒我」，已经对不上了。
  * 说法用车图上的编号，数字读成英文单词（one ~ eight）：
  *   light N on -> ON（白光）   light N daytime -> DRL   light N ambient -> AMB
  *   light N strobe -> FLASH    light N off -> OFF
@@ -26,9 +24,9 @@ void ASR_CODE();
  *
  * 中文版和英文版的 ID、串口指令完全一样，ESP32 固件不用区分装的是哪一版。
  *
- * 不用唤醒词：hardware_init 里 set_wakeup_forever() 让模块一直处于唤醒状态，
- * 直接说命令就行。ASR_CODE 里【不要】再调 set_state_enter_wakeup() ——
- * 它会把唤醒时间改回几秒，时间一到模块就休眠，没有唤醒词就再也叫不醒了。
+ * 唤醒词：hey aurora，回复「I am here」。唤醒后才能执行灯光命令（和中文版的「小北同学」一样）。
+ * ASR_CODE 中调用 set_state_enter_wakeup(10000)，每次识别后保持唤醒 10 秒，
+ * 超时后休眠，再说「hey aurora」重新唤醒；不再设置永久唤醒。
  *
  * 每条指令一行：  $<灯组>:<动作>\r\n      例：$APD:DRL
  * 接收端按冒号拆成 灯组 + 动作 两段，各自【整串比对】，不能用 strstr。
@@ -64,9 +62,13 @@ void sendCmd(const char *cmd) {
 void ASR_CODE(){
   //本函数是语音识别成功钩子程序
   //运行时间越短越好，复杂控制启动新线程运行
-  //这里不设唤醒时间：模块是永久唤醒的，见文件头说明
+  //唤醒时间设置必须在 ASR_CODE 中才有效，单位为毫秒
+  set_state_enter_wakeup(10000);
 
   switch (snid) {
+    /* 唤醒词只唤醒语音模块，不下发灯光指令 */
+    case 0: break;
+
     /* 1 号：前杠灯（主灯） */
     case 11:  sendCmd("BMP:DRL");       break;
     case 12:  sendCmd("BMP:AMB");       break;
@@ -151,7 +153,6 @@ void hardware_init(){
   //需要操作系统启动后初始化的内容
   //音量范围1-7
   vol_set(7);
-  set_wakeup_forever();   // 永久唤醒：不用唤醒词，直接说命令
   vTaskDelete(NULL);
 }
 
@@ -164,7 +165,8 @@ void setup()
   //播报音下拉菜单可以选择，合成音量是指TTS生成文件的音量
   //欢迎词指开机提示音，可以为空
   //退出语音是指休眠时提示音，可以为空
-  //不用唤醒词：模块永久唤醒（见 hardware_init），直接说命令。回复语可以空。ID范围为0-9999
+  //休眠后先用唤醒词唤醒，再执行命令。ID 范围为 0-9999
+  //{ID:0,keyword:"唤醒词",ASR:"hey aurora",ASRTO:"I am here"}
   //{ID:11,keyword:"命令词",ASR:"light one daytime",ASRTO:"OK, light one daytime"}
   //{ID:12,keyword:"命令词",ASR:"light one ambient",ASRTO:"OK, light one ambient"}
   //{ID:13,keyword:"命令词",ASR:"light one strobe",ASRTO:"OK, light one strobe"}
