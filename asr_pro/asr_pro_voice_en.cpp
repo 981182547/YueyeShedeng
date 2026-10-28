@@ -15,12 +15,16 @@ void ASR_CODE();
  * 越野射灯 2.0 —— 语音命令【English · 数字编号版】，串口指令协议（115200）
  *
  * 按天问【英文模型】的模板写的：播报音是 Dora-英语女声，回复语用英文。
- * 说法用车图上的编号，数字读成英文单词（one ~ eight）：
- *   light N on -> ON（白光）   light N daytime -> DRL   light N ambient -> AMB
- *   light N strobe -> FLASH    light N off -> OFF
- * 整组：main lights ...（1~4 号）、aux lights ...（5~8 号）；
- * 全车：party mode on / party mode off / all lights off。
- * 如果平台提示 aux 不认识，把 aux 换成 auxiliary 就行。
+ * 说法用车图上的编号，数字读成英文单词（one ~ eight）。区分的词放在句首：
+ *   open light N -> ON（白光）     close light N -> OFF
+ *   daytime light N -> DRL          ambient light N -> AMB      strobe light N -> FLASH
+ * 整组：open / close / daytime / ambient / strobe (/ dim) + main lights（1~4 号）
+ *       或 auxiliary lights（5~8 号）；
+ * 全车：start party mode / stop party mode / close all lights。
+ *
+ * 为什么不用 on / off：两个都是轻读的短词，说快了很容易互相认错；
+ * 而且原来每条都是「light N 某个词」，前面全一样，只靠最后一个短词区分。
+ * 现在每条开头的词就不一样，open / close 也比 on / off 好认得多。
  *
  * 中文版和英文版的 ID、串口指令完全一样，ESP32 固件不用区分装的是哪一版。
  *
@@ -167,60 +171,60 @@ void setup()
   //退出语音是指休眠时提示音，可以为空
   //休眠后先用唤醒词唤醒，再执行命令。ID 范围为 0-9999
   //{ID:0,keyword:"唤醒词",ASR:"hey aurora",ASRTO:"I am here"}
-  //{ID:11,keyword:"命令词",ASR:"light one daytime",ASRTO:"OK, light one daytime"}
-  //{ID:12,keyword:"命令词",ASR:"light one ambient",ASRTO:"OK, light one ambient"}
-  //{ID:13,keyword:"命令词",ASR:"light one strobe",ASRTO:"OK, light one strobe"}
-  //{ID:14,keyword:"命令词",ASR:"light one off",ASRTO:"OK, light one off"}
-  //{ID:15,keyword:"命令词",ASR:"light one on",ASRTO:"OK, light one on"}
-  //{ID:21,keyword:"命令词",ASR:"light two daytime",ASRTO:"OK, light two daytime"}
-  //{ID:22,keyword:"命令词",ASR:"light two ambient",ASRTO:"OK, light two ambient"}
-  //{ID:23,keyword:"命令词",ASR:"light two strobe",ASRTO:"OK, light two strobe"}
-  //{ID:24,keyword:"命令词",ASR:"light two off",ASRTO:"OK, light two off"}
-  //{ID:25,keyword:"命令词",ASR:"light two on",ASRTO:"OK, light two on"}
-  //{ID:31,keyword:"命令词",ASR:"light three daytime",ASRTO:"OK, light three daytime"}
-  //{ID:32,keyword:"命令词",ASR:"light three ambient",ASRTO:"OK, light three ambient"}
-  //{ID:33,keyword:"命令词",ASR:"light three strobe",ASRTO:"OK, light three strobe"}
-  //{ID:34,keyword:"命令词",ASR:"light three off",ASRTO:"OK, light three off"}
-  //{ID:35,keyword:"命令词",ASR:"light three on",ASRTO:"OK, light three on"}
-  //{ID:41,keyword:"命令词",ASR:"light four daytime",ASRTO:"OK, light four daytime"}
-  //{ID:42,keyword:"命令词",ASR:"light four ambient",ASRTO:"OK, light four ambient"}
-  //{ID:43,keyword:"命令词",ASR:"light four strobe",ASRTO:"OK, light four strobe"}
-  //{ID:44,keyword:"命令词",ASR:"light four off",ASRTO:"OK, light four off"}
-  //{ID:45,keyword:"命令词",ASR:"light four on",ASRTO:"OK, light four on"}
-  //{ID:51,keyword:"命令词",ASR:"light five daytime",ASRTO:"OK, light five daytime"}
-  //{ID:52,keyword:"命令词",ASR:"light five ambient",ASRTO:"OK, light five ambient"}
-  //{ID:53,keyword:"命令词",ASR:"light five strobe",ASRTO:"OK, light five strobe"}
-  //{ID:54,keyword:"命令词",ASR:"light five off",ASRTO:"OK, light five off"}
-  //{ID:55,keyword:"命令词",ASR:"light five on",ASRTO:"OK, light five on"}
-  //{ID:61,keyword:"命令词",ASR:"light six daytime",ASRTO:"OK, light six daytime"}
-  //{ID:62,keyword:"命令词",ASR:"light six ambient",ASRTO:"OK, light six ambient"}
-  //{ID:63,keyword:"命令词",ASR:"light six strobe",ASRTO:"OK, light six strobe"}
-  //{ID:64,keyword:"命令词",ASR:"light six off",ASRTO:"OK, light six off"}
-  //{ID:65,keyword:"命令词",ASR:"light six on",ASRTO:"OK, light six on"}
-  //{ID:71,keyword:"命令词",ASR:"light seven daytime",ASRTO:"OK, light seven daytime"}
-  //{ID:72,keyword:"命令词",ASR:"light seven ambient",ASRTO:"OK, light seven ambient"}
-  //{ID:73,keyword:"命令词",ASR:"light seven strobe",ASRTO:"OK, light seven strobe"}
-  //{ID:74,keyword:"命令词",ASR:"light seven off",ASRTO:"OK, light seven off"}
-  //{ID:75,keyword:"命令词",ASR:"light seven on",ASRTO:"OK, light seven on"}
-  //{ID:81,keyword:"命令词",ASR:"light eight daytime",ASRTO:"OK, light eight daytime"}
-  //{ID:82,keyword:"命令词",ASR:"light eight ambient",ASRTO:"OK, light eight ambient"}
-  //{ID:83,keyword:"命令词",ASR:"light eight strobe",ASRTO:"OK, light eight strobe"}
-  //{ID:84,keyword:"命令词",ASR:"light eight off",ASRTO:"OK, light eight off"}
-  //{ID:85,keyword:"命令词",ASR:"light eight on",ASRTO:"OK, light eight on"}
-  //{ID:101,keyword:"命令词",ASR:"main lights daytime",ASRTO:"OK, main lights daytime"}
-  //{ID:102,keyword:"命令词",ASR:"main lights ambient",ASRTO:"OK, main lights ambient"}
-  //{ID:103,keyword:"命令词",ASR:"main lights strobe",ASRTO:"OK, main lights strobe"}
-  //{ID:104,keyword:"命令词",ASR:"main lights off",ASRTO:"OK, main lights off"}
-  //{ID:105,keyword:"命令词",ASR:"main lights on",ASRTO:"OK, main lights on"}
-  //{ID:106,keyword:"命令词",ASR:"main lights dim",ASRTO:"OK, main lights dim"}
-  //{ID:111,keyword:"命令词",ASR:"aux lights daytime",ASRTO:"OK, aux lights daytime"}
-  //{ID:112,keyword:"命令词",ASR:"aux lights ambient",ASRTO:"OK, aux lights ambient"}
-  //{ID:113,keyword:"命令词",ASR:"aux lights strobe",ASRTO:"OK, aux lights strobe"}
-  //{ID:114,keyword:"命令词",ASR:"aux lights off",ASRTO:"OK, aux lights off"}
-  //{ID:115,keyword:"命令词",ASR:"aux lights on",ASRTO:"OK, aux lights on"}
-  //{ID:121,keyword:"命令词",ASR:"party mode on",ASRTO:"OK, party mode on"}
-  //{ID:122,keyword:"命令词",ASR:"party mode off",ASRTO:"OK, party mode off"}
-  //{ID:123,keyword:"命令词",ASR:"all lights off",ASRTO:"OK, all lights off"}
+  //{ID:11,keyword:"命令词",ASR:"daytime light one",ASRTO:"OK, daytime light one"}
+  //{ID:12,keyword:"命令词",ASR:"ambient light one",ASRTO:"OK, ambient light one"}
+  //{ID:13,keyword:"命令词",ASR:"strobe light one",ASRTO:"OK, strobe light one"}
+  //{ID:14,keyword:"命令词",ASR:"close light one",ASRTO:"OK, close light one"}
+  //{ID:15,keyword:"命令词",ASR:"open light one",ASRTO:"OK, open light one"}
+  //{ID:21,keyword:"命令词",ASR:"daytime light two",ASRTO:"OK, daytime light two"}
+  //{ID:22,keyword:"命令词",ASR:"ambient light two",ASRTO:"OK, ambient light two"}
+  //{ID:23,keyword:"命令词",ASR:"strobe light two",ASRTO:"OK, strobe light two"}
+  //{ID:24,keyword:"命令词",ASR:"close light two",ASRTO:"OK, close light two"}
+  //{ID:25,keyword:"命令词",ASR:"open light two",ASRTO:"OK, open light two"}
+  //{ID:31,keyword:"命令词",ASR:"daytime light three",ASRTO:"OK, daytime light three"}
+  //{ID:32,keyword:"命令词",ASR:"ambient light three",ASRTO:"OK, ambient light three"}
+  //{ID:33,keyword:"命令词",ASR:"strobe light three",ASRTO:"OK, strobe light three"}
+  //{ID:34,keyword:"命令词",ASR:"close light three",ASRTO:"OK, close light three"}
+  //{ID:35,keyword:"命令词",ASR:"open light three",ASRTO:"OK, open light three"}
+  //{ID:41,keyword:"命令词",ASR:"daytime light four",ASRTO:"OK, daytime light four"}
+  //{ID:42,keyword:"命令词",ASR:"ambient light four",ASRTO:"OK, ambient light four"}
+  //{ID:43,keyword:"命令词",ASR:"strobe light four",ASRTO:"OK, strobe light four"}
+  //{ID:44,keyword:"命令词",ASR:"close light four",ASRTO:"OK, close light four"}
+  //{ID:45,keyword:"命令词",ASR:"open light four",ASRTO:"OK, open light four"}
+  //{ID:51,keyword:"命令词",ASR:"daytime light five",ASRTO:"OK, daytime light five"}
+  //{ID:52,keyword:"命令词",ASR:"ambient light five",ASRTO:"OK, ambient light five"}
+  //{ID:53,keyword:"命令词",ASR:"strobe light five",ASRTO:"OK, strobe light five"}
+  //{ID:54,keyword:"命令词",ASR:"close light five",ASRTO:"OK, close light five"}
+  //{ID:55,keyword:"命令词",ASR:"open light five",ASRTO:"OK, open light five"}
+  //{ID:61,keyword:"命令词",ASR:"daytime light six",ASRTO:"OK, daytime light six"}
+  //{ID:62,keyword:"命令词",ASR:"ambient light six",ASRTO:"OK, ambient light six"}
+  //{ID:63,keyword:"命令词",ASR:"strobe light six",ASRTO:"OK, strobe light six"}
+  //{ID:64,keyword:"命令词",ASR:"close light six",ASRTO:"OK, close light six"}
+  //{ID:65,keyword:"命令词",ASR:"open light six",ASRTO:"OK, open light six"}
+  //{ID:71,keyword:"命令词",ASR:"daytime light seven",ASRTO:"OK, daytime light seven"}
+  //{ID:72,keyword:"命令词",ASR:"ambient light seven",ASRTO:"OK, ambient light seven"}
+  //{ID:73,keyword:"命令词",ASR:"strobe light seven",ASRTO:"OK, strobe light seven"}
+  //{ID:74,keyword:"命令词",ASR:"close light seven",ASRTO:"OK, close light seven"}
+  //{ID:75,keyword:"命令词",ASR:"open light seven",ASRTO:"OK, open light seven"}
+  //{ID:81,keyword:"命令词",ASR:"daytime light eight",ASRTO:"OK, daytime light eight"}
+  //{ID:82,keyword:"命令词",ASR:"ambient light eight",ASRTO:"OK, ambient light eight"}
+  //{ID:83,keyword:"命令词",ASR:"strobe light eight",ASRTO:"OK, strobe light eight"}
+  //{ID:84,keyword:"命令词",ASR:"close light eight",ASRTO:"OK, close light eight"}
+  //{ID:85,keyword:"命令词",ASR:"open light eight",ASRTO:"OK, open light eight"}
+  //{ID:101,keyword:"命令词",ASR:"daytime main lights",ASRTO:"OK, daytime main lights"}
+  //{ID:102,keyword:"命令词",ASR:"ambient main lights",ASRTO:"OK, ambient main lights"}
+  //{ID:103,keyword:"命令词",ASR:"strobe main lights",ASRTO:"OK, strobe main lights"}
+  //{ID:104,keyword:"命令词",ASR:"close main lights",ASRTO:"OK, close main lights"}
+  //{ID:105,keyword:"命令词",ASR:"open main lights",ASRTO:"OK, open main lights"}
+  //{ID:106,keyword:"命令词",ASR:"dim main lights",ASRTO:"OK, dim main lights"}
+  //{ID:111,keyword:"命令词",ASR:"daytime auxiliary lights",ASRTO:"OK, daytime auxiliary lights"}
+  //{ID:112,keyword:"命令词",ASR:"ambient auxiliary lights",ASRTO:"OK, ambient auxiliary lights"}
+  //{ID:113,keyword:"命令词",ASR:"strobe auxiliary lights",ASRTO:"OK, strobe auxiliary lights"}
+  //{ID:114,keyword:"命令词",ASR:"close auxiliary lights",ASRTO:"OK, close auxiliary lights"}
+  //{ID:115,keyword:"命令词",ASR:"open auxiliary lights",ASRTO:"OK, open auxiliary lights"}
+  //{ID:121,keyword:"命令词",ASR:"start party mode",ASRTO:"OK, start party mode"}
+  //{ID:122,keyword:"命令词",ASR:"stop party mode",ASRTO:"OK, stop party mode"}
+  //{ID:123,keyword:"命令词",ASR:"close all lights",ASRTO:"OK, close all lights"}
   setPinFun(4,FIRST_FUNCTION);
   pinMode(4,output);
   digitalWrite(4,0);   // 上电先拉低，保证开机时灯是灭的
