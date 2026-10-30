@@ -49,9 +49,8 @@ const int kChMaskAll = 0x77777777;
 /// 8 组全选(组掩码,bit g = 第 g 组)
 const int kGroupsAll = 0xFF;
 
-/// 开机状态:主灯 1~4 组日行灯亮(CH1/5/9/13),辅助灯全灭。
-/// 和固件 applyBootState() 一致,没连上设备时界面就先按这个画。
-const int kBootMask = 0x2222;
+/// 开机状态:8 组全灭。和固件 applyBootState() 一致,没连上设备时界面就先按这个画。
+const int kBootMask = 0;
 
 /// 主灯 / 辅助灯。[groups] 是组掩码,bit g = 第 g 组。
 class Section {

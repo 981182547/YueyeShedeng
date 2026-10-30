@@ -57,7 +57,7 @@ class AppState extends ChangeNotifier {
   /// 32 位通道掩码,第 N 位 = CH N【现在亮不亮】。
   /// 它没有别的含义 —— 不是"允许亮",就是"亮着"。
   ///
-  /// 初值就是固件的开机状态:主灯 1~4 组日行灯亮,辅助灯全灭。
+  /// 初值就是固件的开机状态:8 组全灭。
   int chMask = kBootMask;
 
   /// 这几组的白光在爆闪(bit g = 第 g 组)
@@ -397,8 +397,8 @@ class AppState extends ChangeNotifier {
   /// 拖动结束时调用:确保最终值一定发到设备
   void commitBrightness() => setBrightness(brightness, commit: true);
 
-  /// 总开关:有灯亮着(或者在娱乐模式)就全关;全灭的时候回到开机那个样子 ——
-  /// 主灯日行、辅助灯灭,和车子点火时一样。
+  /// 总开关:有灯亮着(或者在娱乐模式)就全关;全灭的时候按一下开主灯日行
+  /// (只焊了辅助灯板的车就开辅助灯日行)—— 按了总得有灯亮。
   void togglePower() {
     if (allDark) {
       // 只接了辅助灯板的车没有主灯,那就让辅助灯日行 —— 按了总得有灯亮
